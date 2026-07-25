@@ -495,19 +495,48 @@ class RobustPupilDetector:
         
         # Blink-Daten
         if blink_data is not None:
-            result['is_blink'] = blink_data['is_blink']
-            result['eyes_closed'] = blink_data['eyes_closed']
-            result['left_ear'] = blink_data['left_ear']
-            result['right_ear'] = blink_data['right_ear']
-            result['avg_ear'] = blink_data['avg_ear']
-            result['blink_count'] = blink_data['blink_count']
+            # Original blink fields
+            result["is_blink"] = blink_data.get("is_blink", False)
+            result["eyes_closed"] = blink_data.get("eyes_closed", False)
+            result["left_ear"] = blink_data.get("left_ear")
+            result["right_ear"] = blink_data.get("right_ear")
+            result["avg_ear"] = blink_data.get("avg_ear")
+            result["blink_count"] = blink_data.get("blink_count", 0)
+            result["frames_below_threshold"] = blink_data.get("frames_below_threshold", 0)
+
+            # New filter fields
+            result["valid_eye_frame"] = blink_data.get("valid_eye_frame", True)
+            result["invalid_reason"] = blink_data.get("invalid_reason")
+            result["is_suspected_blink"] = blink_data.get("is_suspected_blink", False)
+            result["is_transition_frame"] = blink_data.get("is_transition_frame", False)
+
+            # Useful debug fields
+            result["left_threshold"] = blink_data.get("left_threshold")
+            result["right_threshold"] = blink_data.get("right_threshold")
+            result["ear_asymmetry"] = blink_data.get("ear_asymmetry")
+            result["baseline_samples"] = blink_data.get("baseline_samples")
+
         else:
-            result['is_blink'] = False
-            result['eyes_closed'] = False
-            result['left_ear'] = None
-            result['right_ear'] = None
-            result['avg_ear'] = None
-            result['blink_count'] = 0
+            # Blink detector disabled or not available:
+            # do not invalidate the frame just because blink filtering is absent.
+            result["is_blink"] = False
+            result["eyes_closed"] = False
+            result["left_ear"] = None
+            result["right_ear"] = None
+            result["avg_ear"] = None
+            result["blink_count"] = 0
+            result["frames_below_threshold"] = 0
+
+            result["valid_eye_frame"] = True
+            result["invalid_reason"] = None
+            result["is_suspected_blink"] = False
+            result["is_transition_frame"] = False
+
+            result["left_threshold"] = None
+            result["right_threshold"] = None
+            result["ear_asymmetry"] = None
+            result["baseline_samples"] = None
+
         
         return result
     
@@ -517,125 +546,163 @@ class RobustPupilDetector:
     # ═════════════════════════════════════════════════════════════════════
     
     def extract_from_window(self, video_path: str, timestamp: float,
-                           window_start: float = 0.5, window_end: float = 3.0,
-                           min_confidence: float = None) -> Dict:
+                        window_start: float = 0.5, window_end: float = 3.0,
+                        min_confidence: float = None) -> Dict:
         """
         Extrahiert Pupillenposition aus ZEITFENSTER.
         Nutzt ALLE 6 Ebenen inkl. IQR und Median-Aggregation!
-        
+
         Args:
             video_path: Pfad zum Video
             timestamp: Marker-Zeitpunkt (Sekunden)
             window_start: Start-Offset (Sekunden NACH Marker)
             window_end: End-Offset (Sekunden NACH Marker)
             min_confidence: Mindest-Confidence (default: MIN_CONFIDENCE)
-        
+
         Returns:
             dict mit:
             - 'success': True/False
             - 'position': [x, y] aggregiert (Median)
             - 'confidence': Durchschnittliche Confidence
             - 'n_frames_total': Anzahl Frames im Fenster
-            - 'n_frames_valid': Anzahl nach Confidence-Filter
+            - 'n_frames_valid': Anzahl nach Confidence/Plausibility/Blink-Filter
             - 'n_frames_after_iqr': Anzahl nach IQR
             - 'std_x', 'std_y': Streuung (Qualitätsmetrik)
-            - 'error': Fehlermeldung (bei success=False)
+
+            # new added:
+            - 'n_frames_eye_valid': Anzahl Frames mit valid_eye_frame=True
+            - 'n_frames_eye_invalid': Anzahl Frames mit valid_eye_frame=False
+            - 'invalid_reason_counts': Gründe für ungültige Eye-Frames
         """
-        
+
         if min_confidence is None:
             min_confidence = MIN_CONFIDENCE
-        
+
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return {'success': False, 'error': 'Video nicht öffenbar'}
-        
+
         fps = cap.get(cv2.CAP_PROP_FPS)
-        
+
         start_time = timestamp + window_start
         end_time = timestamp + window_end
-        
+
         start_frame = int(start_time * fps)
         end_frame = int(end_time * fps)
-        
+
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        
+
         # ──────────────────────────────────────────────────────────────
         # EBENE 1-3: Frame-by-Frame mit Qualitäts-Filtering
         # ──────────────────────────────────────────────────────────────
-        
+
         positions = []
         confidences = []
-        
+
+        # new added: statistics for blink / eye-frame filter
+        n_frames_eye_valid = 0
+        n_frames_eye_invalid = 0
+        invalid_reason_counts = {}
+
         for frame_num in range(start_frame, end_frame):
             ret, frame = cap.read()
             if not ret:
                 break
-            
+
             result = self.extract_from_frame(frame)
-            
-            #  Ebene 3: Confidence-Filtering
-            if (result['position'] is not None and 
+
+            # new added: read eye-frame validity from blink filter
+            # If the key is missing, default to True for backward compatibility.
+            valid_eye_frame = result.get('valid_eye_frame', True)
+
+            # new added: count valid / invalid eye frames
+            if valid_eye_frame:
+                n_frames_eye_valid += 1
+            else:
+                n_frames_eye_invalid += 1
+                invalid_reason = result.get('invalid_reason', 'unknown')
+                invalid_reason_counts[invalid_reason] = (
+                    invalid_reason_counts.get(invalid_reason, 0) + 1
+                )
+
+            # modified: Ebene 3 now also filters by valid_eye_frame
+            if (
+                result['position'] is not None and
                 result['confidence'] >= min_confidence and
-                result['plausibility_passed']):
+                result['plausibility_passed'] and
+                valid_eye_frame
+            ):
                 positions.append(result['position'])
                 confidences.append(result['confidence'])
-        
+
         cap.release()
-        
+
         n_frames_total = end_frame - start_frame
         n_frames_valid = len(positions)
-        
+
         if n_frames_valid < 5:
             return {
                 'success': False,
                 'error': f'Zu wenige valide Frames: {n_frames_valid}/5',
                 'n_frames_total': n_frames_total,
-                'n_frames_valid': n_frames_valid
+                'n_frames_valid': n_frames_valid,
+
+                # new added
+                'n_frames_eye_valid': n_frames_eye_valid,
+                'n_frames_eye_invalid': n_frames_eye_invalid,
+                'invalid_reason_counts': invalid_reason_counts,
             }
-        
+
         positions = np.array(positions)
         confidences = np.array(confidences)
-        
+
         # ──────────────────────────────────────────────────────────────
         # EBENE 4: IQR OUTLIER-REMOVAL (nur bei ≥10 Frames!)
         # ──────────────────────────────────────────────────────────────
-        
+
         if n_frames_valid >= MIN_SAMPLES_FOR_IQR:
             positions_clean = self._remove_outliers_iqr(positions)
         else:
             positions_clean = positions
-        
+
         n_frames_after_iqr = len(positions_clean)
-        
+
         if n_frames_after_iqr < 3:
             return {
                 'success': False,
                 'error': f'Zu wenige Frames nach IQR: {n_frames_after_iqr}/3',
                 'n_frames_total': n_frames_total,
                 'n_frames_valid': n_frames_valid,
-                'n_frames_after_iqr': n_frames_after_iqr
+                'n_frames_after_iqr': n_frames_after_iqr,
+
+                # new added
+                'n_frames_eye_valid': n_frames_eye_valid,
+                'n_frames_eye_invalid': n_frames_eye_invalid,
+                'invalid_reason_counts': invalid_reason_counts,
             }
-        
+
         # ──────────────────────────────────────────────────────────────
         # EBENE 5: TEMPORAL SMOOTHING
         # ──────────────────────────────────────────────────────────────
-        
-        positions_smooth = self._temporal_smoothing(positions_clean, 
-                                                    window=SMOOTHING_WINDOW_CALIBRATION)
-        
+
+        positions_smooth = self._temporal_smoothing(
+            positions_clean,
+            window=SMOOTHING_WINDOW_CALIBRATION
+        )
+
         # ──────────────────────────────────────────────────────────────
         # EBENE 6: MEDIAN-AGGREGATION
         # ──────────────────────────────────────────────────────────────
-        
+
         if USE_MEDIAN_INSTEAD_OF_MEAN:
             final_position = np.median(positions_smooth, axis=0)
         else:
             final_position = np.mean(positions_smooth, axis=0)
-        
+
         # Durchschnittliche Confidence (begrenzt auf Anzahl smooth Frames)
         n_smooth = len(positions_smooth)
         avg_confidence = np.mean(confidences[:n_smooth])
-        
+
         return {
             'success': True,
             'position': final_position.tolist(),
@@ -643,6 +710,12 @@ class RobustPupilDetector:
             'n_frames_total': n_frames_total,
             'n_frames_valid': n_frames_valid,
             'n_frames_after_iqr': n_frames_after_iqr,
+
+            # new added
+            'n_frames_eye_valid': n_frames_eye_valid,
+            'n_frames_eye_invalid': n_frames_eye_invalid,
+            'invalid_reason_counts': invalid_reason_counts,
+
             'std_x': float(np.std(positions_smooth[:, 0])),
             'std_y': float(np.std(positions_smooth[:, 1]))
         }
@@ -683,7 +756,18 @@ class RobustPupilDetector:
         result['right_ear'] = None
         result['avg_ear'] = None
         result['blink_count'] = 0
-        
+
+        ## new added
+        result["frames_below_threshold"] = 0
+        result["valid_eye_frame"] = False
+        result["invalid_reason"] = "no_valid_pupil_or_face"
+        result["is_suspected_blink"] = False
+        result["is_transition_frame"] = False
+        result["left_threshold"] = None
+        result["right_threshold"] = None
+        result["ear_asymmetry"] = None
+        result["baseline_samples"] = None
+
         return result
     
     def _remove_outliers_iqr(self, positions: np.ndarray) -> np.ndarray:
@@ -720,6 +804,15 @@ class RobustPupilDetector:
         df_smooth = df.rolling(window=window, center=True, min_periods=1).mean()
         
         return df_smooth.values
+    
+    # new added
+    def reset(self):
+        """Reset stateful detectors for a new video or a new independent window."""
+        if self.blink_detector is not None:
+            self.blink_detector.reset()
+
+        if self.head_pose_estimator is not None:
+            self.head_pose_estimator.reset()    
     
     def close(self):
         """Schließt MediaPipe Face Mesh"""
