@@ -9,7 +9,7 @@ Outputs
    thresholds, eye-closure flags, validity, and invalid reasons.
 
 2. blink_filter_regions.csv
-   Consecutive invalid frames merged into regions for Figure 7 overlays in R.
+   Consecutive invalid frames merged into regions for blink-comparison plots.
 
 Important
 ---------
@@ -35,27 +35,118 @@ import pandas as pd
 
 
 # =============================================================================
-# PATH SETUP
+# PROJECT PATHS
 # =============================================================================
 
-# Expected location:
-#   IDP_Code/Skripte/debug/export_blink_filter_logs.py
+# This file is intended to live directly under:
+#   /Users/yiyi_mac/IDP_Code/export_blink_filter_logs.py
 #
-# parents[0] = debug
-# parents[1] = Skripte
-# parents[2] = IDP_Code
+# shared_pupil_detection is located under:
+#   IDP_Code/Skripte/shared/shared_pupil_detection.py
 SCRIPT_PATH = Path(__file__).resolve()
-SKRIPTE_DIR = SCRIPT_PATH.parents[1]
-PROJECT_ROOT = SCRIPT_PATH.parents[2]
+PROJECT_ROOT = SCRIPT_PATH.parent
+SKRIPTE_DIR = PROJECT_ROOT / "Skripte"
 
-# "shared" is located in IDP_Code/Skripte/shared.
-# PROJECT_ROOT is also added because other project imports may depend on it.
 for import_root in (SKRIPTE_DIR, PROJECT_ROOT):
     import_root_str = str(import_root)
     if import_root_str not in sys.path:
         sys.path.insert(0, import_root_str)
 
-from shared.shared_pupil_detection import RobustPupilDetector
+try:
+    from Skripte.shared.shared_pupil_detection import RobustPupilDetector
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "Could not import shared.shared_pupil_detection. "
+        "Place this script directly in IDP_Code and confirm that "
+        "IDP_Code/Skripte/shared/shared_pupil_detection.py exists."
+    ) from exc
+
+# =============================================================================
+# USER RUN SETTINGS
+# =============================================================================
+
+# Camera frequency and result-volume selection.
+#
+# 25 Hz:
+#   HZ = 25
+#   EMPRA = 9
+#
+# 60 Hz:
+#   HZ = 60
+#   EMPRA = 10
+HZ = 60
+EMPRA = 10
+
+# Both 25 Hz and 60 Hz source videos are stored on Empra9.
+VIDEO_EMPRA = 9
+
+# Derived directory layout:
+#
+# HZ = 25, EMPRA = 9:
+#   /Volumes/Empra9/Videos_25
+#   /Volumes/Empra9/Ergebnisse25/<VP>/test25
+#
+# HZ = 60, EMPRA = 10:
+#   /Volumes/Empra9/Videos_60
+#   /Volumes/Empra10/Ergebnisse60/<VP>/test60
+VIDEO_ROOT = Path(f"/Volumes/Empra{VIDEO_EMPRA}/Videos_{HZ}")
+RESULTS_ROOT = Path(f"/Volumes/Empra{EMPRA}/Ergebnisse{HZ}")
+OUTPUT_SUBDIR = f"test{HZ}"
+
+# Retained for compatibility with any code that expects DEFAULT_* names.
+DEFAULT_VIDEO_ROOT = VIDEO_ROOT
+DEFAULT_RESULTS_ROOT = RESULTS_ROOT
+DEFAULT_OUTPUT_SUBDIR = OUTPUT_SUBDIR
+
+# Edit this list to choose which VP videos are processed when the script is
+# launched without command-line arguments.
+VP_CODES = [
+    "beo7",
+    "bjs4",
+    "egf5",
+    "fbn6",
+    "fgt6",
+    "jkl7",
+    "kdn8",
+    "kro3",
+    "mhe9",
+    "oem4",
+    "ogt7",
+]
+
+# Full-video processing settings.
+PROCESS_START_MS = 0.0
+PROCESS_END_MS: Optional[float] = None
+TIME_ZERO_MS = 0.0
+WARMUP_MS = 2000.0
+
+# None means process the whole selected video.
+# Set, for example, MAX_FRAMES = 500 for a short test run.
+MAX_FRAMES: Optional[int] = None
+
+# When several VPs are configured:
+# True  -> report a failed VP and continue with the remaining VPs.
+# False -> stop immediately at the first error.
+CONTINUE_ON_ERROR = True
+
+
+def validate_path_configuration() -> None:
+    """Catch accidental Hz/volume combinations before processing videos."""
+    if HZ not in {25, 60}:
+        raise ValueError(f"HZ must be 25 or 60, got {HZ!r}.")
+
+    expected_empra = 9 if HZ == 25 else 10
+    if EMPRA != expected_empra:
+        raise ValueError(
+            f"For HZ={HZ}, EMPRA should be {expected_empra}, "
+            f"but EMPRA={EMPRA} was configured."
+        )
+
+    if VIDEO_EMPRA != 9:
+        raise ValueError(
+            "Both Videos_25 and Videos_60 are expected on Empra9, "
+            f"but VIDEO_EMPRA={VIDEO_EMPRA} was configured."
+        )
 
 
 # =============================================================================
@@ -154,38 +245,70 @@ def map_reason_group(invalid_reason: Optional[str]) -> str:
 
 
 def infer_metadata_from_output_dir(output_dir: Path):
-    """
-    Infer AP/VP code and run name from common project output paths.
+    """Infer VP code and output/run name from the Empra result layout.
 
-    Examples
-    --------
-    Ergebnisse/bjs4/Analyse/Run_25hz_...
-        -> ap_code = bjs4
-        -> run_name = Run_25hz_...
+    Supported examples
+    ------------------
+    /Volumes/Empra10/Ergebnisse60/beo7/test60
+        -> ap_code = beo7, run_name = test60
 
-    Ergebnisse/beo7/test
-        -> ap_code = beo7
-        -> run_name = test
+    /Volumes/Empra10/Ergebnisse60/beo7/Analyse/Run_60hz_FullCalib_...
+        -> ap_code = beo7, run_name = Run_60hz_FullCalib_...
     """
     output_dir = output_dir.resolve()
     run_name = output_dir.name
     ap_code = None
-
     parts = output_dir.parts
 
-    # Preferred structure: .../Ergebnisse/<ap_code>/Analyse/<run_name>
     if "Analyse" in parts:
         analyse_index = len(parts) - 1 - list(reversed(parts)).index("Analyse")
         if analyse_index >= 1:
             ap_code = parts[analyse_index - 1]
 
-    # Fallback: .../Ergebnisse/<ap_code>/<some output folder>
-    if ap_code is None and "Ergebnisse" in parts:
-        ergebnisse_index = len(parts) - 1 - list(reversed(parts)).index("Ergebnisse")
-        if ergebnisse_index + 1 < len(parts):
-            ap_code = parts[ergebnisse_index + 1]
+    if ap_code is None:
+        result_indices = [
+            index
+            for index, part in enumerate(parts)
+            if part.lower().startswith("ergebnisse")
+        ]
+        if result_indices:
+            result_index = result_indices[-1]
+            if result_index + 1 < len(parts):
+                ap_code = parts[result_index + 1]
+
+    # Final fallback for .../<VP>/test60.
+    if ap_code is None and output_dir.name.lower().startswith("test"):
+        ap_code = output_dir.parent.name
 
     return ap_code, run_name
+
+
+def find_video_for_vp(video_root: Path, vp_code: str) -> Path:
+    """Find one video whose filename stem exactly matches the VP code."""
+    if not video_root.is_dir():
+        raise FileNotFoundError(f"Video root does not exist: {video_root}")
+
+    matches = [
+        path
+        for path in video_root.iterdir()
+        if path.is_file()
+        and path.stem.lower() == vp_code.lower()
+        and path.suffix.lower() in {".mp4", ".mov", ".m4v", ".avi"}
+    ]
+
+    if not matches:
+        raise FileNotFoundError(
+            f"No video named {vp_code}.mp4 (case-insensitive) found in "
+            f"{video_root}"
+        )
+
+    if len(matches) > 1:
+        match_text = "\n  ".join(str(path) for path in matches)
+        raise RuntimeError(
+            f"Multiple videos match VP {vp_code}:\n  {match_text}"
+        )
+
+    return matches[0]
 
 
 def reset_detector_state(detector: RobustPupilDetector) -> None:
@@ -694,121 +817,284 @@ def export_blink_filter_logs(
 # COMMAND LINE INTERFACE
 # =============================================================================
 
-def main() -> None:
+def process_configured_vp(
+    vp_code: str,
+    video_root: Path,
+    results_root: Path,
+    output_subdir: str,
+    process_start_ms: float,
+    process_end_ms: Optional[float],
+    time_zero_ms: float,
+    warmup_ms: float,
+    max_frames: Optional[int],
+) -> None:
+    """Resolve configured Empra paths and process one VP."""
+    vp_code = str(vp_code).strip()
+
+    if not vp_code:
+        raise ValueError("VP code must not be empty.")
+
+    video_path = find_video_for_vp(video_root, vp_code)
+    output_dir = results_root / vp_code / output_subdir
+
+    print("\n" + "=" * 78)
+    print(f"VP: {vp_code}")
+    print(f"Video:  {video_path}")
+    print(f"Output: {output_dir}")
+    print("=" * 78)
+
+    export_blink_filter_logs(
+        video_path=str(video_path),
+        output_dir=str(output_dir),
+        process_start_ms=process_start_ms,
+        process_end_ms=process_end_ms,
+        time_zero_ms=time_zero_ms,
+        warmup_ms=warmup_ms,
+        ap_code=vp_code,
+        run_name=output_subdir,
+        vp_label=None,
+        trial_nr=None,
+        max_frames=max_frames,
+    )
+
+
+def main() -> int:
+    validate_path_configuration()
+
     parser = argparse.ArgumentParser(
         description=(
-            "Export blink-filter frame logs and merged invalid regions "
-            "for Figure 7 overlays."
+            "Export webcam blink-filter logs. With no arguments, the script "
+            "processes the VP_CODES configured near the top of this file. "
+            "Command-line options remain available as temporary overrides."
         )
     )
 
     parser.add_argument(
-        "--video",
-        required=True,
-        help="Path to the input video.",
+        "--vp",
+        action="append",
+        default=None,
+        help=(
+            "Temporarily override VP_CODES. May be supplied more than once, "
+            "for example: --vp beo7 --vp bjs4"
+        ),
     )
-
+    parser.add_argument(
+        "--video",
+        default=None,
+        help="Manual path to one input video.",
+    )
     parser.add_argument(
         "--output-dir",
-        required=True,
-        help="Directory in which the two CSV files are written.",
+        default=None,
+        help="Manual output directory; required when --video is used.",
     )
-
+    parser.add_argument(
+        "--video-root",
+        type=Path,
+        default=None,
+        help="Temporarily override VIDEO_ROOT.",
+    )
+    parser.add_argument(
+        "--results-root",
+        type=Path,
+        default=None,
+        help="Temporarily override RESULTS_ROOT.",
+    )
+    parser.add_argument(
+        "--output-subdir",
+        default=None,
+        help="Temporarily override OUTPUT_SUBDIR.",
+    )
     parser.add_argument(
         "--process-start-ms",
         type=float,
-        default=0.0,
-        help=(
-            "First video time to export, in ms. "
-            "Default: 0."
-        ),
+        default=None,
+        help="Temporarily override PROCESS_START_MS.",
     )
-
     parser.add_argument(
         "--process-end-ms",
         type=float,
         default=None,
-        help=(
-            "Stop exporting at this video time, in ms. "
-            "Default: end of video."
-        ),
+        help="Temporarily override PROCESS_END_MS.",
     )
-
     parser.add_argument(
         "--time-zero-ms",
         type=float,
-        default=0.0,
-        help=(
-            "Zero point for exported time_ms. "
-            "For trial-relative output, use the trial start time. "
-            "Default: 0."
-        ),
+        default=None,
+        help="Temporarily override TIME_ZERO_MS.",
     )
-
     parser.add_argument(
         "--warmup-ms",
         type=float,
-        default=2000.0,
-        help=(
-            "Process this much video before process-start-ms to "
-            "initialize the adaptive EAR baseline. Warm-up frames are "
-            "not exported. Default: 2000."
-        ),
-    )
-
-    parser.add_argument(
-        "--ap-code",
         default=None,
-        help=(
-            "Optional AP/VP code, e.g. beo7. "
-            "Inferred from output-dir when possible."
-        ),
+        help="Temporarily override WARMUP_MS.",
     )
-
-    parser.add_argument(
-        "--run-name",
-        default=None,
-        help=(
-            "Optional run name. "
-            "Inferred from output-dir when omitted."
-        ),
-    )
-
-    parser.add_argument(
-        "--vp-label",
-        default=None,
-        help='Optional R label, e.g. "VP 8".',
-    )
-
-    parser.add_argument(
-        "--trial-nr",
-        default=None,
-        help="Optional experiment trial number.",
-    )
-
     parser.add_argument(
         "--max-frames",
         type=int,
         default=None,
-        help="Optional exported-frame limit for quick testing.",
+        help=(
+            "Temporarily override MAX_FRAMES. When omitted, the value "
+            "configured in the file is used."
+        ),
+    )
+    parser.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="Stop at the first failed VP, overriding CONTINUE_ON_ERROR.",
     )
 
     args = parser.parse_args()
 
-    export_blink_filter_logs(
-        video_path=args.video,
-        output_dir=args.output_dir,
-        process_start_ms=args.process_start_ms,
-        process_end_ms=args.process_end_ms,
-        time_zero_ms=args.time_zero_ms,
-        warmup_ms=args.warmup_ms,
-        ap_code=args.ap_code,
-        run_name=args.run_name,
-        vp_label=args.vp_label,
-        trial_nr=args.trial_nr,
-        max_frames=args.max_frames,
+    video_root = (
+        args.video_root.expanduser().resolve()
+        if args.video_root is not None
+        else VIDEO_ROOT.expanduser().resolve()
     )
+    results_root = (
+        args.results_root.expanduser().resolve()
+        if args.results_root is not None
+        else RESULTS_ROOT.expanduser().resolve()
+    )
+    output_subdir = (
+        args.output_subdir
+        if args.output_subdir is not None
+        else OUTPUT_SUBDIR
+    )
+    process_start_ms = (
+        args.process_start_ms
+        if args.process_start_ms is not None
+        else PROCESS_START_MS
+    )
+    process_end_ms = (
+        args.process_end_ms
+        if args.process_end_ms is not None
+        else PROCESS_END_MS
+    )
+    time_zero_ms = (
+        args.time_zero_ms
+        if args.time_zero_ms is not None
+        else TIME_ZERO_MS
+    )
+    warmup_ms = (
+        args.warmup_ms
+        if args.warmup_ms is not None
+        else WARMUP_MS
+    )
+    max_frames = (
+        args.max_frames
+        if args.max_frames is not None
+        else MAX_FRAMES
+    )
+
+    # Manual one-video mode remains available, but direct execution uses
+    # the internal VP_CODES list.
+    if args.video is not None:
+        if args.vp:
+            parser.error("--video cannot be combined with --vp.")
+        if not args.output_dir:
+            parser.error("--output-dir is required when --video is used.")
+
+        video_path = Path(args.video).expanduser().resolve()
+        output_dir = Path(args.output_dir).expanduser().resolve()
+
+        print("\nManual path mode:")
+        print(f"  Video:  {video_path}")
+        print(f"  Output: {output_dir}")
+
+        export_blink_filter_logs(
+            video_path=str(video_path),
+            output_dir=str(output_dir),
+            process_start_ms=process_start_ms,
+            process_end_ms=process_end_ms,
+            time_zero_ms=time_zero_ms,
+            warmup_ms=warmup_ms,
+            ap_code=None,
+            run_name=None,
+            vp_label=None,
+            trial_nr=None,
+            max_frames=max_frames,
+        )
+        return 0
+
+    selected_vps = args.vp if args.vp else VP_CODES
+    selected_vps = [
+        str(vp).strip()
+        for vp in selected_vps
+        if str(vp).strip()
+    ]
+
+    if not selected_vps:
+        raise ValueError(
+            "No VP configured. Add at least one code to VP_CODES near "
+            "the top of the script."
+        )
+
+    # Preserve order while avoiding accidental duplicate full-video runs.
+    selected_vps = list(dict.fromkeys(selected_vps))
+
+    print("\n=== Internal run configuration ===")
+    print(f"Hz:             {HZ}")
+    print(f"Video Empra:    {VIDEO_EMPRA}")
+    print(f"Results Empra:  {EMPRA}")
+    print(f"VPs:            {', '.join(selected_vps)}")
+    print(f"Video root:     {video_root}")
+    print(f"Results root:   {results_root}")
+    print(f"Output subdir:  {output_subdir}")
+    print(f"Process start:  {process_start_ms} ms")
+    print(
+        "Process end:    "
+        + (
+            "video end"
+            if process_end_ms is None
+            else f"{process_end_ms} ms"
+        )
+    )
+    print(
+        "Frame limit:    "
+        + ("none" if max_frames is None else str(max_frames))
+    )
+
+    continue_on_error = CONTINUE_ON_ERROR and not args.stop_on_error
+    failures: list[tuple[str, str]] = []
+
+    for vp_code in selected_vps:
+        try:
+            process_configured_vp(
+                vp_code=vp_code,
+                video_root=video_root,
+                results_root=results_root,
+                output_subdir=output_subdir,
+                process_start_ms=process_start_ms,
+                process_end_ms=process_end_ms,
+                time_zero_ms=time_zero_ms,
+                warmup_ms=warmup_ms,
+                max_frames=max_frames,
+            )
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            failures.append((vp_code, message))
+            print(
+                f"\n[ERROR] VP {vp_code}: {message}",
+                file=sys.stderr,
+            )
+
+            if not continue_on_error:
+                return 1
+
+    print("\n" + "=" * 78)
+    print("Processing finished")
+    print(f"Successful: {len(selected_vps) - len(failures)}")
+    print(f"Failed:     {len(failures)}")
+
+    if failures:
+        print("\nFailed VPs:")
+        for vp_code, message in failures:
+            print(f"  {vp_code}: {message}")
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
