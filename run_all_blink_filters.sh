@@ -12,7 +12,7 @@ set -u
 PYTHON_BIN="$(command -v python3.10)"
 
 PROJECT_ROOT="/Users/yiyi_mac/IDP_Code"
-VIDEO_DIR="/Volumes/Empra/Videos_25"
+VIDEO_DIR="/Volumes/Empra9/Videos_25"
 PYTHON_SCRIPT="$PROJECT_ROOT/Skripte/debug/export_blink_filter_logs.py"
 
 
@@ -45,7 +45,7 @@ fi
 if [[ ! -d "$VIDEO_DIR" ]]; then
   echo "[ERROR] Video directory not found:"
   echo "        $VIDEO_DIR"
-  echo "Make sure /Volumes/Empra is mounted."
+  echo "Make sure /Volumes/Empra9 is mounted."
   exit 1
 fi
 
