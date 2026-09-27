@@ -68,6 +68,7 @@ except ImportError:
 
 # Shared Detection (v1.3)
 from shared.shared_pupil_detection import RobustPupilDetector
+from shared.shared_image_preprocessing import preprocess_frame
 
 # Config
 from config import (
@@ -97,6 +98,7 @@ if 'PIPELINE_EYETRACKER_FILE_PATH' in os.environ:
 if 'PIPELINE_CALIBRATION_PKL_PATH' in os.environ:
     CALIBRATION_PKL_PATH = Path(os.environ['PIPELINE_CALIBRATION_PKL_PATH'])
 
+PREPROCESS_MODE = os.environ.get('PIPELINE_PREPROCESS_MODE', 'none')
 # ══════════════════════════════════════════════════════════════════════
 # KALIBRIERUNGSMODUS (NEU v3.3)
 # ══════════════════════════════════════════════════════════════════════
@@ -528,6 +530,8 @@ class OfflineVideoCalibration:
             if not ret:
                 break
             
+            frame = preprocess_frame(frame, PREPROCESS_MODE)
+
             result = self.pupil_extractor.detector.extract_from_frame(frame)
             
             if (result['position'] is not None and 

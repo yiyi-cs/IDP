@@ -53,6 +53,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import Ridge
 
+from shared.shared_image_preprocessing import preprocess_frame
+
 # ptgaze imports
 from shared.shared_gaze_detection_ptgaze import PtgazeGazeDetector
 
@@ -75,6 +77,8 @@ if 'PIPELINE_OUTPUT_BASE_DIR' in os.environ:
 
 if 'PIPELINE_MAIN_VIDEO_PATH' in os.environ:
     VIDEO_PATH = Path(os.environ['PIPELINE_MAIN_VIDEO_PATH'])
+
+PREPROCESS_MODE = os.environ.get('PIPELINE_PREPROCESS_MODE', 'none')
 
 # ══════════════════════════════════════════════════════════════════════
 # KALIBRIERUNGSMODUS (NEU v1.2 - analog zu offline_calibration.py)
@@ -312,6 +316,10 @@ class OfflinePtgazeCalibration:
         else:
             video_width = 1440
             video_height = 1080
+            
+        if PREPROCESS_MODE == "lanczos_2x":
+            video_width *= 2
+            video_height *= 2
         
         self.gaze_extractor = VideoGazeExtractor(video_width, video_height)
         
@@ -472,6 +480,8 @@ class OfflinePtgazeCalibration:
             if not ret:
                 break
             
+            frame = preprocess_frame(frame, PREPROCESS_MODE)
+
             # Nutze ptgaze Detector!
             result = self.gaze_extractor.detector.extract_from_frame(frame)
             
