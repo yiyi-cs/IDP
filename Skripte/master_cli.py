@@ -289,7 +289,7 @@ class MasterCLI:
             video_fps=video_options[0],
             calib_mode=calib_modes[0],
             analysis_mode=analysis_mode,
-            methods=methods
+            methods=methods,
             preprocess_mode=PREPROCESS_MODE
         )
         

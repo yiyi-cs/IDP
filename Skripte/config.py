@@ -74,7 +74,7 @@ FIRST_TRIAL_IS_PRACTICE = True      # Trial 1 ist Uebungslauf (wird Trial 0)
 
 # ==================== IMAGE PREPROCESSING ====================
 
-PREPROCESS_MODE = "none"
+PREPROCESS_MODE = "lanczos_2x"
 # Supported:
 # - "none"
 # - "lanczos_2x"

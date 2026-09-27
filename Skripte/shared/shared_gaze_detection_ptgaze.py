@@ -33,6 +33,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 # =================================================================================
 import cv2
 import numpy as np
+
+if not hasattr(np, "float"):
+    np.float = float
+    
 import tempfile
 import pathlib
 import yaml
