@@ -55,6 +55,7 @@ from config import *
 from shared.shared_gaze_detection_ptgaze import PtgazeGazeDetector
 from omegaconf import OmegaConf
 from ptgaze.common import Visualizer
+from shared.shared_image_preprocessing import preprocess_frame
 
 # Environment-Variable-Overrides (fuer master_cli.py)
 if 'PIPELINE_OUTPUT_BASE_DIR' in os.environ:
@@ -62,6 +63,8 @@ if 'PIPELINE_OUTPUT_BASE_DIR' in os.environ:
 
 if 'PIPELINE_MAIN_VIDEO_PATH' in os.environ:
     VIDEO_PATH = Path(os.environ['PIPELINE_MAIN_VIDEO_PATH'])
+    
+PREPROCESS_MODE = os.environ.get('PIPELINE_PREPROCESS_MODE', 'none')
 
 # ==================== BAD SAMPLE DETECTION ====================
 
@@ -289,6 +292,9 @@ class PtgazeGazeAnalyzer:
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if PREPROCESS_MODE == "lanczos_2x":
+            width *= 2
+            height *= 2
         self.fps = fps
         
         print(f"   Video: {width}x{height} @ {fps:.1f} FPS")
@@ -326,7 +332,7 @@ class PtgazeGazeAnalyzer:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                
+                frame = preprocess_frame(frame, PREPROCESS_MODE)
                 # Detektiere Gaze
                 result = self._detect_frame(frame, frame_num, timestamp_offset_ms=0)
                 result['trial_number'] = trial_num  # Fuege Trial-Nummer hinzu
@@ -369,6 +375,9 @@ class PtgazeGazeAnalyzer:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if PREPROCESS_MODE == "lanczos_2x":
+            width *= 2
+            height *= 2
         self.fps = fps
         
         print(f"Video: {Path(video_path).name}")
@@ -392,7 +401,7 @@ class PtgazeGazeAnalyzer:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                
+                frame = preprocess_frame(frame, PREPROCESS_MODE)
                 result = self._detect_frame(frame, frame_number, 0)
                 data.append(result)
                 
@@ -756,8 +765,20 @@ if __name__ == "__main__":
             print(f"\n[X] Block-Videos nicht gefunden in: {EXPERIMENTAL_VIDEOS_FOLDER}")
             print(f"   Erwarte: *_block1.mp4 und *_block2.mp4")
             exit(1)
-        
-        analyzer = PtgazeGazeAnalyzer(video_width=1440, video_height=1080)
+            
+        cap = cv2.VideoCapture(video_path_block1)
+        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+
+        if PREPROCESS_MODE == "lanczos_2x":
+            video_width *= 2
+            video_height *= 2
+            
+        analyzer = PtgazeGazeAnalyzer(
+            video_width=video_width,
+            video_height=video_height
+        )
         df = analyzer.process_video(video_path_block1, video_path_block2)
     
     else:
@@ -770,8 +791,21 @@ if __name__ == "__main__":
         if not os.path.exists(VIDEO_PATH):
             print(f"\n[X] Video nicht gefunden: {VIDEO_PATH}")
             exit(1)
+            
+        cap = cv2.VideoCapture(video_path)
+        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+
+        if PREPROCESS_MODE == "lanczos_2x":
+            video_width *= 2
+            video_height *= 2            
         
-        analyzer = PtgazeGazeAnalyzer(video_width=1440, video_height=1080)
+        analyzer = PtgazeGazeAnalyzer(
+            video_width=video_width,
+            video_height=video_height
+        )
+        
         df = analyzer.process_video(VIDEO_PATH)
     
     if df is not None:

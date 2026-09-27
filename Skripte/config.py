@@ -72,9 +72,19 @@ N_TRIALS = 24                       # Anzahl experimentelle Trials
 EXPECTED_TONE_EVENTS = 48           # 24 Fixation + 24 Trial = 48 Toene
 FIRST_TRIAL_IS_PRACTICE = True      # Trial 1 ist Uebungslauf (wird Trial 0)
 
+# ==================== IMAGE PREPROCESSING ====================
+
+PREPROCESS_MODE = "none"
+# Supported:
+# - "none"
+# - "lanczos_2x"
+
+
 # ---------------------------------------------------------------------------------
 # Output-Dateinamen (automatisch generiert)
 # ---------------------------------------------------------------------------------
+
+
 
 OUTPUT_FILES = {
     # debug_0: Phase Detection

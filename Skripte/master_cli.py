@@ -43,6 +43,8 @@ if TYPE_CHECKING:
 import time
 from datetime import datetime
 
+from config import PREPROCESS_MODE
+
 # Eigene Module (aus utils/)
 from utils.vp_data_manager import (
     VPDataManager, 
@@ -288,6 +290,7 @@ class MasterCLI:
             calib_mode=calib_modes[0],
             analysis_mode=analysis_mode,
             methods=methods
+            preprocess_mode=PREPROCESS_MODE
         )
         
         # ══════════════════════════════════════════════════════════════
@@ -871,6 +874,7 @@ class MasterCLI:
                             calib_mode=calib_mode,
                             create_calibration=True,
                             analysis_mode=analysis_mode,
+                            preprocess_mode=PREPROCESS_MODE,
                             methods=methods
                         )
                         
@@ -902,6 +906,7 @@ class MasterCLI:
                             calib_mode=calib_mode,
                             create_calibration=True,
                             analysis_mode=analysis_mode,
+                            preprocess_mode=PREPROCESS_MODE,
                             methods=methods
                         )
                         
@@ -947,6 +952,7 @@ class MasterCLI:
                             calib_mode=calib_mode,
                             create_calibration=True,
                             analysis_mode=analysis_mode,
+                            preprocess_mode=PREPROCESS_MODE,
                             methods=methods
                         )
                         
@@ -1225,6 +1231,7 @@ class MasterCLI:
                         calib_mode=calib_mode,
                         create_calibration=create_calibration,
                         analysis_mode=analysis_mode,
+                        preprocess_mode=PREPROCESS_MODE,
                         methods=methods
                     )
                     
@@ -1382,6 +1389,7 @@ class MasterCLI:
                         create_calibration=create_calibration,
                         analysis_mode=analysis_mode,
                         methods=methods,
+                        preprocess_mode=PREPROCESS_MODE,
                         cache_decisions=cache_decisions
                     )
                     

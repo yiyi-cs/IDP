@@ -39,6 +39,7 @@ from tqdm import tqdm
 from typing import List, Tuple, Optional, Dict
 from config import *
 from shared.shared_pupil_detection import RobustPupilDetector
+from shared.shared_image_preprocessing import preprocess_frame
 
 # Environment-Variable-Overrides (für master_cli.py)
 import os
@@ -54,6 +55,8 @@ if 'PIPELINE_EYETRACKER_FILE_PATH' in os.environ:
 
 if 'PIPELINE_CALIBRATION_PKL_PATH' in os.environ:
     CALIBRATION_PKL_PATH = Path(os.environ['PIPELINE_CALIBRATION_PKL_PATH'])
+
+PREPROCESS_MODE = os.environ.get('PIPELINE_PREPROCESS_MODE', 'none')
 
 # ==================== MULTI-VIDEO HELPER (NEU v2.3) ====================
 
@@ -186,6 +189,9 @@ class PupilDetector:
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if PREPROCESS_MODE == "lanczos_2x":
+            width *= 2
+            height *= 2
         self.fps = fps
         
         print(f"   Video: {width}x{height} @ {fps:.1f} FPS")
@@ -220,6 +226,8 @@ class PupilDetector:
                 ret, frame = cap.read()
                 if not ret:
                     break
+                
+                frame = preprocess_frame(frame, PREPROCESS_MODE)
                 
                 # Detektiere Pupille
                 result = self._detect_frame(frame, frame_num, timestamp_offset_ms=0)
@@ -267,6 +275,9 @@ class PupilDetector:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if PREPROCESS_MODE == "lanczos_2x":
+            width *= 2
+            height *= 2
         self.fps = fps
         
         print(f"Video: {Path(video_path).name}")
@@ -287,6 +298,8 @@ class PupilDetector:
                 ret, frame = cap.read()
                 if not ret:
                     break
+                
+                frame = preprocess_frame(frame, PREPROCESS_MODE)
                 
                 result = self._detect_frame(frame, frame_number, 0)
                 data.append(result)

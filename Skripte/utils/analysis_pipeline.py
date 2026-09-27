@@ -73,6 +73,7 @@ class RunConfiguration:
     create_calibration: bool
     analysis_mode: int = 2                      # 1=Standalone, 2=Comparison
     methods: str = 'both'                       # 'mediapipe', 'ptgaze', 'both'
+    preprocess_mode: str = 'none'
     calibration_pkl_path: Optional[Path] = None
     calibration_ptgaze_pkl_path: Optional[Path] = None
     
@@ -89,7 +90,8 @@ class RunConfiguration:
             video_fps=self.video_fps,
             calib_mode=self.calib_mode,
             analysis_mode=self.analysis_mode,
-            methods=self.methods
+            methods=self.methods,
+            preprocess_mode=self.preprocess_mode
         )
 
 @dataclass
@@ -1011,6 +1013,7 @@ class AnalysisPipeline:
         env['PIPELINE_ANALYSIS_MODE'] = str(config.analysis_mode)
         env['PIPELINE_CALIB_MODE'] = config.calib_mode  # NEU v2.2
         env['PIPELINE_METHODS'] = config.methods  # NEU v2.2
+        env['PIPELINE_PREPROCESS_MODE'] = config.preprocess_mode
         return env
     
     def _run_debug_0(self, config: RunConfiguration, output_dir: Path) -> tuple:
@@ -1310,6 +1313,7 @@ class AnalysisPipeline:
             'calib_mode': config.calib_mode,
             'analysis_mode': config.analysis_mode,
             'methods': config.methods,  # NEU v2.1
+            'preprocess_mode': config.preprocess_mode,
             'create_calibration': config.create_calibration,
             'calibration_pkl_path': str(config.calibration_pkl_path) if config.calibration_pkl_path else None,
             'calibration_ptgaze_pkl_path': str(config.calibration_ptgaze_pkl_path) if config.calibration_ptgaze_pkl_path else None,

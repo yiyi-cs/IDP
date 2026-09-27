@@ -60,6 +60,7 @@ class VPData:
     calibration_jsons: Dict[str, Path] = None # {'beg': Path, 'mid': Path, 'end': Path}
     analysis_folder: Optional[Path] = None    # Analyse-Unterordner (falls vorhanden)
     has_analysis: bool = False                # True wenn Analyse-Ordner existiert
+
     
     def __post_init__(self):
         if self.videos is None:
@@ -103,6 +104,7 @@ class RunConfig:
     calib_mode: str                 # 'FullCalib', 'BegEnd', etc.
     analysis_mode: int              # 1 oder 2
     methods: str                    # 'mediapipe', 'ptgaze', 'both'
+    preprocess_mode: str = "none"
     
     def matches(self, other: 'RunConfig', ignore_fields: List[str] = None) -> bool:
         """
@@ -123,11 +125,13 @@ class RunConfig:
             return False
         if 'methods' not in ignore_fields and self.methods != other.methods:
             return False
+        if ('preprocess_mode' not in ignore_fields and self.preprocess_mode != other.preprocess_mode):
+            return False
         
         return True
     
     def __str__(self):
-        return f"{self.video_fps}_{self.calib_mode}_mode{self.analysis_mode}_{self.methods}"
+        return f"{self.video_fps}_{self.calib_mode}_mode{self.analysis_mode}_{self.methods}_preprocess-{self.preprocess_mode}"
 
 
 @dataclass
@@ -206,15 +210,15 @@ class RunInfo:
 # Definiert welche Config-Felder fuer jeden Schritt relevant sind
 CACHE_CRITERIA = {
     'debug_0': ['video_fps'],
-    'debug_1_mediapipe': ['video_fps'],
-    'debug_1_ptgaze': ['video_fps'],
-    'offline_calibration': ['video_fps', 'calib_mode'],
-    'offline_calibration_ptgaze': ['video_fps', 'calib_mode'],
-    'debug_3': [],  # Keine Config-Abhaengigkeit (nur ASC-Datei)
-    'debug_4': ['video_fps'],
-    'debug_5_mediapipe': ['video_fps', 'calib_mode'],
-    'debug_5_ptgaze': ['video_fps', 'calib_mode'],
-    'debug_6': ['video_fps', 'calib_mode', 'analysis_mode'],
+    'debug_1_mediapipe': ['video_fps', 'preprocess_mode'],
+    'debug_1_ptgaze': ['video_fps', 'preprocess_mode'],
+    'offline_calibration': ['video_fps', 'calib_mode', 'preprocess_mode'],
+    'offline_calibration_ptgaze': ['video_fps', 'calib_mode', 'preprocess_mode'],
+    'debug_3': [],
+    'debug_4': ['video_fps', 'preprocess_mode'],
+    'debug_5_mediapipe': ['video_fps', 'calib_mode', 'preprocess_mode'],
+    'debug_5_ptgaze': ['video_fps', 'calib_mode', 'preprocess_mode'],
+    'debug_6': ['video_fps', 'calib_mode', 'analysis_mode', 'preprocess_mode'],
 }
 
 # Mapping: Step -> erwartete Output-Dateien
