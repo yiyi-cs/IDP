@@ -1217,13 +1217,13 @@ class MasterCLI:
             
             # Master-JSON Pfad für Fallback wenn VP-spezifische JSON fehlt
             if self.master_sync_log_path.exists():
-                os.environ['PIPELINE_self.master_sync_log_path'] = str(self.master_sync_log_path)
+                os.environ['PIPELINE_MASTER_SYNC_LOG_PATH'] = str(self.master_sync_log_path)
                 print(f"    [INFO] Master-JSON verfügbar: {self.master_sync_log_path.name}")
                 # Master-Calibration Ordner (selber Ordner wie Master-Sync-Log)
                 os.environ['PIPELINE_MASTER_CALIBRATION_FOLDER'] = str(self.master_defaults_folder)
                 print(f"    [INFO] Master-Calibration-Folder gesetzt: {self.master_defaults_folder}")               
             else:
-                os.environ.pop('PIPELINE_self.master_sync_log_path', None)
+                os.environ.pop('PIPELINE_MASTER_SYNC_LOG_PATH', None)
             
             pipeline = AnalysisPipeline(vp_data, self.scripts_folder)
             
@@ -1371,11 +1371,11 @@ class MasterCLI:
             
             # Master-JSON Pfad für Fallback wenn VP-spezifische
             if self.master_sync_log_path.exists():
-                os.environ['PIPELINE_self.master_sync_log_path'] = str(self.master_sync_log_path)
+                os.environ['PIPELINE_MASTER_SYNC_LOG_PATH'] = str(self.master_sync_log_path)
                 print(f"    [INFO] Master-JSON verfügbar: {self.master_sync_log_path.name}")
             else:
                 # Entferne Variable falls sie von vorherigem Run existiert
-                os.environ.pop('PIPELINE_self.master_sync_log_path', None)
+                os.environ.pop('PIPELINE_MASTER_SYNC_LOG_PATH', None)
             
             pipeline = AnalysisPipeline(vp_data, self.scripts_folder)
             
