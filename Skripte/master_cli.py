@@ -1543,8 +1543,17 @@ class MasterCLI:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--video-root", type=Path, required=True)
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=_PROJECT_ROOT.parent / "Ergebnisse"
+    )
+
+    parser.add_argument(
+        "--video-root",
+        type=Path,
+        default=_PROJECT_ROOT.parent / "Videos_60"
+    )
     args = parser.parse_args()
 
     try:
