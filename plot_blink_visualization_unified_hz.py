@@ -61,6 +61,7 @@ Required packages
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import re
@@ -389,13 +390,13 @@ def find_latest_matching_run(vp_dir: Path) -> Path:
     return selected
 
 
-def discover_inputs(vp_code: str) -> InputPaths:
+def discover_inputs(vp_code: str, explicit_run_dir: Optional[Path] = None) -> InputPaths:
     vp_dir = RESULTS_ROOT / vp_code
     if not vp_dir.is_dir():
         raise FileNotFoundError(f"VP directory not found: {vp_dir}")
 
-    run_dir = find_latest_matching_run(vp_dir)
-    test_dir = vp_dir / TEST_SUBDIR
+    run_dir = explicit_run_dir.resolve() if explicit_run_dir is not None else find_latest_matching_run(vp_dir)
+    test_dir = run_dir
 
     paths = InputPaths(
         vp_code=vp_code,
@@ -1670,6 +1671,24 @@ def save_processing_summary(payloads: list[PlotPayload]) -> None:
 # =============================================================================
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--results-root", type=Path, default=None)
+    parser.add_argument("--vp", action="append", default=None)
+    parser.add_argument("--run-dir", type=Path, default=None)
+    parser.add_argument("--trial", type=int, default=None)
+    args = parser.parse_args()
+
+    global RESULTS_ROOT, OUTPUT_ROOT, VP_CODES, TRIAL_NUMBER
+    if args.results_root is not None:
+        RESULTS_ROOT = args.results_root.expanduser().resolve()
+        OUTPUT_ROOT = RESULTS_ROOT / f"Blink_Visualization_{HZ}hz_FullCalib"
+    if args.vp:
+        VP_CODES = args.vp
+    if args.trial is not None:
+        TRIAL_NUMBER = args.trial
+    if args.run_dir is not None and len(VP_CODES) != 1:
+        parser.error("--run-dir requires exactly one VP (use --vp).")
+
     try:
         validate_settings()
 
@@ -1694,7 +1713,7 @@ def main() -> int:
 
         for vp_code in VP_CODES:
             try:
-                item = discover_inputs(vp_code)
+                item = discover_inputs(vp_code, args.run_dir)
                 payload = prepare_one_vp(item)
                 inputs.append(item)
                 payloads.append(payload)

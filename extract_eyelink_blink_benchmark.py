@@ -705,6 +705,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="Write EyeLink benchmark CSVs directly into one pipeline Run directory.",
+    )
+    parser.add_argument(
         "--continue-on-error",
         action="store_true",
         help="In batch mode, report a failed VP and continue with the others.",
@@ -744,9 +750,13 @@ def main() -> int:
 
             vp_code = args.vp_code or asc_file.parent.name
             output_dir = (
-                args.output_dir.expanduser().resolve()
-                if args.output_dir is not None
-                else asc_file.parent / DEFAULT_OUTPUT_SUBDIR
+                args.run_dir.expanduser().resolve()
+                if args.run_dir is not None
+                else (
+                    args.output_dir.expanduser().resolve()
+                    if args.output_dir is not None
+                    else asc_file.parent / DEFAULT_OUTPUT_SUBDIR
+                )
             )
 
             summary = process_one_asc(
@@ -758,6 +768,8 @@ def main() -> int:
             return 0
 
         root = args.root.expanduser().resolve()
+        if args.run_dir is not None and (not args.vp or len(args.vp) != 1):
+            parser.error("--run-dir in root mode requires exactly one --vp.")
         if not root.is_dir():
             raise FileNotFoundError(f"Root directory does not exist: {root}")
 
@@ -787,7 +799,11 @@ def main() -> int:
                     raise FileNotFoundError(f"VP directory does not exist: {vp_dir}")
 
                 asc_file = find_vp_asc(vp_dir, vp_code)
-                output_dir = vp_dir / DEFAULT_OUTPUT_SUBDIR
+                output_dir = (
+                    args.run_dir.expanduser().resolve()
+                    if args.run_dir is not None
+                    else vp_dir / DEFAULT_OUTPUT_SUBDIR
+                )
                 summary = process_one_asc(
                     asc_file=asc_file,
                     vp_code=vp_code,

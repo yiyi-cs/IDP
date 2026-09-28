@@ -54,6 +54,7 @@ for import_root in (SKRIPTE_DIR, PROJECT_ROOT):
 
 try:
     from Skripte.shared.shared_pupil_detection import RobustPupilDetector
+    from Skripte.shared.shared_image_preprocessing import preprocess_frame
 except ModuleNotFoundError as exc:
     raise ModuleNotFoundError(
         "Could not import shared.shared_pupil_detection. "
@@ -511,6 +512,7 @@ def export_blink_filter_logs(
     vp_label: Optional[str] = None,
     trial_nr: Optional[str] = None,
     max_frames: Optional[int] = None,
+    preprocess_mode: str = "none",
 ) -> None:
     """
     Process a video frame by frame and export blink-filter logs.
@@ -655,6 +657,7 @@ def export_blink_filter_logs(
                 )
                 break
 
+            frame = preprocess_frame(frame, preprocess_mode)
             result = detector.extract_from_frame(frame)
 
             # Warm-up frames update temporal detector state, but are not exported.
@@ -827,8 +830,9 @@ def process_configured_vp(
     time_zero_ms: float,
     warmup_ms: float,
     max_frames: Optional[int],
+    preprocess_mode: str,
 ) -> None:
-    """Resolve configured Empra paths and process one VP."""
+    """Resolve configured paths and process one VP."""
     vp_code = str(vp_code).strip()
 
     if not vp_code:
@@ -855,6 +859,7 @@ def process_configured_vp(
         vp_label=None,
         trial_nr=None,
         max_frames=max_frames,
+        preprocess_mode=preprocess_mode,
     )
 
 
@@ -939,12 +944,25 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--preprocess-mode",
+        default="none",
+        choices=["none", "lanczos_2x"],
+        help="Image preprocessing applied before blink detection.",
+    )
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="Write blink CSVs directly into one existing pipeline Run directory.",
+    )
+    parser.add_argument(
         "--stop-on-error",
         action="store_true",
         help="Stop at the first failed VP, overriding CONTINUE_ON_ERROR.",
     )
 
     args = parser.parse_args()
+    preprocess_mode = args.preprocess_mode
 
     video_root = (
         args.video_root.expanduser().resolve()
@@ -987,6 +1005,29 @@ def main() -> int:
         else MAX_FRAMES
     )
 
+    if args.run_dir is not None:
+        if not args.vp or len(args.vp) != 1:
+            parser.error("--run-dir requires exactly one --vp.")
+        if args.video is not None or args.output_dir is not None:
+            parser.error("--run-dir cannot be combined with --video/--output-dir.")
+        vp_code = args.vp[0]
+        video_path = find_video_for_vp(video_root, vp_code)
+        export_blink_filter_logs(
+            video_path=str(video_path),
+            output_dir=str(args.run_dir.expanduser().resolve()),
+            process_start_ms=process_start_ms,
+            process_end_ms=process_end_ms,
+            time_zero_ms=time_zero_ms,
+            warmup_ms=warmup_ms,
+            ap_code=vp_code,
+            run_name=args.run_dir.name,
+            vp_label=None,
+            trial_nr=None,
+            max_frames=max_frames,
+            preprocess_mode=preprocess_mode,
+        )
+        return 0
+
     # Manual one-video mode remains available, but direct execution uses
     # the internal VP_CODES list.
     if args.video is not None:
@@ -1014,6 +1055,7 @@ def main() -> int:
             vp_label=None,
             trial_nr=None,
             max_frames=max_frames,
+            preprocess_mode=preprocess_mode,
         )
         return 0
 
@@ -1070,6 +1112,7 @@ def main() -> int:
                 time_zero_ms=time_zero_ms,
                 warmup_ms=warmup_ms,
                 max_frames=max_frames,
+                preprocess_mode=preprocess_mode,
             )
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"

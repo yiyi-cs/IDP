@@ -1323,7 +1323,7 @@ class MasterCLI:
         """
         Fuehrt Analysen mit vordefinierten Cache-Entscheidungen aus (v2.2).
         """
-        global self.master_sync_log_path 
+        # global self.master_sync_log_path 
        
         print_header("AUSFUEHRUNG")
         
