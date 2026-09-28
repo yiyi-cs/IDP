@@ -1121,7 +1121,7 @@ class AnalysisPipeline:
                 [sys.executable, str(script)],
                 cwd=self.scripts_folder,
                 env=env,
-                timeout=600
+                timeout=3600
             )
             
             if result.returncode == 0:

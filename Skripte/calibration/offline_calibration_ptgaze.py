@@ -308,8 +308,13 @@ class OfflinePtgazeCalibration:
         # ======================================================================
         
         # Bestimme Video-Aufloesung (fuer ptgaze Config)
-        if experimental_video_path:
-            cap = cv2.VideoCapture(experimental_video_path)
+        video_path_for_size = experimental_video_path
+
+        if not video_path_for_size and 'PIPELINE_MAIN_VIDEO_PATH' in os.environ:
+            video_path_for_size = os.environ['PIPELINE_MAIN_VIDEO_PATH']
+
+        if video_path_for_size:
+            cap = cv2.VideoCapture(video_path_for_size)
             video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             cap.release()
