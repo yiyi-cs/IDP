@@ -357,8 +357,18 @@ def discover_inputs(vp_code: str, explicit_run_dir: Optional[Path] = None) -> In
     if not vp_dir.is_dir():
         raise FileNotFoundError(f"VP directory not found: {vp_dir}")
 
-    run_dir = explicit_run_dir.resolve() if explicit_run_dir is not None else find_latest_matching_run(vp_dir)
-    test_dir = run_dir
+    run_dir = (
+        explicit_run_dir.resolve()
+        if explicit_run_dir is not None
+        else find_latest_matching_run(vp_dir)
+    )
+
+    test_dir = vp_dir / TEST_SUBDIR
+
+    if not test_dir.is_dir():
+        raise FileNotFoundError(
+            f"Blink test directory not found: {test_dir}"
+        )
 
     paths = InputPaths(
         vp_code=vp_code,
