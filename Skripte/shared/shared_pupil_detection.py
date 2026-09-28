@@ -510,6 +510,18 @@ class RobustPupilDetector:
             result["is_suspected_blink"] = blink_data.get("is_suspected_blink", False)
             result["is_transition_frame"] = blink_data.get("is_transition_frame", False)
 
+            result["left_ear_raw"] = blink_data.get("left_ear_raw")
+            result["right_ear_raw"] = blink_data.get("right_ear_raw")
+
+            result["left_closed"] = blink_data.get("left_closed", False)
+            result["right_closed"] = blink_data.get("right_closed", False)
+
+            result["left_closed_raw"] = blink_data.get("left_closed_raw", False)
+            result["right_closed_raw"] = blink_data.get("right_closed_raw", False)
+
+            result["left_closed_smooth"] = blink_data.get("left_closed_smooth", False)
+            result["right_closed_smooth"] = blink_data.get("right_closed_smooth", False)
+
             # Useful debug fields
             result["left_threshold"] = blink_data.get("left_threshold")
             result["right_threshold"] = blink_data.get("right_threshold")
@@ -536,6 +548,18 @@ class RobustPupilDetector:
             result["right_threshold"] = None
             result["ear_asymmetry"] = None
             result["baseline_samples"] = None
+            
+            result["left_ear_raw"] = None
+            result["right_ear_raw"] = None
+
+            result["left_closed"] = False
+            result["right_closed"] = False
+
+            result["left_closed_raw"] = False
+            result["right_closed_raw"] = False
+
+            result["left_closed_smooth"] = False
+            result["right_closed_smooth"] = False
 
         
         return result

@@ -1,0 +1,17 @@
+
+
+
+
+python inspect_eye_landmarks.py \
+  --video /Volumes/Empra9/Videos_60/beo7.mp4 \
+  --phases /Volumes/Empra10/Ergebnisse60/beo7/Analyse/Run_60hz_FullCalib_mode2_20260119_160844/phases_detected.json \
+  --trial 1 \
+  --times 1 4 8 3 5.8 \
+  --output beo7_trial1_eye_landmarks.pdf
+
+
+python check_ear_frame_consistency.py \
+  --video /Volumes/Empra9/Videos_60/beo7.mp4 \
+  --frame-log /Volumes/Empra10/Ergebnisse60/beo7/test60/blink_filter_frame_log.csv \
+  --phases /Volumes/Empra10/Ergebnisse60/beo7/Analyse/Run_60hz_FullCalib_mode2_20260119_160844/phases_detected.json \
+  --trial 1
