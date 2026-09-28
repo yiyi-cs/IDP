@@ -25,14 +25,15 @@ Important
 """
 
 import argparse
+import bisect
+import json
 import math
+import subprocess
 import sys
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -169,6 +170,7 @@ FRAME_LOG_COLUMNS = [
     "frame_duration_ms",
     "frame_number",
     "video_time_ms",
+    "frame_end_time_ms",
     "time_ms",
     "valid_eye_frame",
     "invalid_reason",
@@ -355,6 +357,79 @@ def safe_bool(value: Any) -> bool:
     return bool(value) if value is not None else False
 
 
+def load_frame_timestamps_ms(
+    video_path: Path,
+    expected_frames: int,
+) -> Optional[List[float]]:
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "frame=best_effort_timestamp_time",
+                "-of", "json",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        data = json.loads(result.stdout)
+
+        ts = [
+            float(f["best_effort_timestamp_time"]) * 1000.0
+            for f in data.get("frames", [])
+            if f.get("best_effort_timestamp_time") is not None
+        ]
+
+        if not ts:
+            print(
+                "[WARN] ffprobe returned no frame timestamps; FPS fallback.",
+                file=sys.stderr,
+            )
+            return None
+
+        # A one-frame difference between container metadata and actually
+        # decodable/timestamped frames is acceptable.
+        if abs(len(ts) - expected_frames) > 1:
+            print(
+                f"[WARN] ffprobe returned {len(ts)} timestamps for "
+                f"{expected_frames} OpenCV frames; FPS fallback.",
+                file=sys.stderr,
+            )
+            return None
+
+        if len(ts) != expected_frames:
+            print(
+                f"[INFO] OpenCV reports {expected_frames} frames, "
+                f"ffprobe provides {len(ts)} PTS frames. "
+                "Using the PTS frame count."
+            )
+
+        if any(ts[i] <= ts[i - 1] for i in range(1, len(ts))):
+            print(
+                "[WARN] Non-monotonic PTS; FPS fallback.",
+                file=sys.stderr,
+            )
+            return None
+
+        return ts
+
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        ValueError,
+        KeyError,
+        json.JSONDecodeError,
+    ):
+        print(
+            "[WARN] Could not read PTS; FPS fallback.",
+            file=sys.stderr,
+        )
+        return None
+
 def validate_arguments(
     process_start_ms: float,
     process_end_ms: Optional[float],
@@ -486,12 +561,12 @@ def build_invalid_regions(
             # Absolute time inside the original video.
             "start_video_time_ms": float(start_row["video_time_ms"]),
             "end_video_time_ms": float(
-                end_row["video_time_ms"] + frame_duration_ms
+                end_row["frame_end_time_ms"]
             ),
 
             # Time aligned to the requested zero point, normally trial-relative.
             "start_ms": float(start_row["time_ms"]),
-            "end_ms": float(end_row["time_ms"] + frame_duration_ms),
+            "end_ms": float(end_row["frame_end_time_ms"] - (end_row["video_time_ms"] - end_row["time_ms"])),
 
             "reason_group": choose_region_reason_group(region_df),
             "invalid_reason": combine_invalid_reasons(region_df),
@@ -596,39 +671,41 @@ def export_blink_filter_logs(
             raise RuntimeError("Video reports zero frames.")
 
         frame_duration_ms = 1000.0 / fps
-        video_duration_ms = total_frames * frame_duration_ms
+        frame_timestamps_ms = load_frame_timestamps_ms(video_path_obj, total_frames)
+        if frame_timestamps_ms is not None:
+            timestamp_mode = "PTS"
 
-        if process_start_ms >= video_duration_ms:
-            raise ValueError(
-                f"--process-start-ms ({process_start_ms:.1f} ms) is outside "
-                f"the video duration ({video_duration_ms:.1f} ms)."
+            # PTS count reflects the frames that actually have valid timestamps.
+            # This may differ by one frame from OpenCV container metadata.
+            total_frames = len(frame_timestamps_ms)
+
+            print(f"Effective frames: {total_frames}")
+
+            last_duration_ms = (
+                frame_timestamps_ms[-1] - frame_timestamps_ms[-2]
+                if total_frames >= 2
+                else frame_duration_ms
             )
-
-        export_start_frame = int(
-            math.floor(process_start_ms / frame_duration_ms)
-        )
-
-        if process_end_ms is None:
-            export_end_frame = total_frames
+            last_duration_ms = frame_timestamps_ms[-1]-frame_timestamps_ms[-2] if total_frames >= 2 else frame_duration_ms
+            frame_end_timestamps_ms = frame_timestamps_ms[1:] + [frame_timestamps_ms[-1]+last_duration_ms]
+            video_duration_ms = frame_end_timestamps_ms[-1]
+            export_start_frame = bisect.bisect_left(frame_timestamps_ms, process_start_ms)
+            export_end_frame = total_frames if process_end_ms is None else bisect.bisect_left(frame_timestamps_ms, process_end_ms)
+            warmup_start_ms = max(0.0, process_start_ms-warmup_ms)
+            warmup_start_frame = bisect.bisect_left(frame_timestamps_ms, warmup_start_ms)
         else:
-            export_end_frame = int(
-                math.ceil(process_end_ms / frame_duration_ms)
-            )
-            export_end_frame = min(export_end_frame, total_frames)
-
+            timestamp_mode = "FPS fallback"
+            video_duration_ms = total_frames*frame_duration_ms
+            export_start_frame = int(math.floor(process_start_ms/frame_duration_ms))
+            export_end_frame = total_frames if process_end_ms is None else min(int(math.ceil(process_end_ms/frame_duration_ms)),total_frames)
+            warmup_start_ms = max(0.0,process_start_ms-warmup_ms)
+            warmup_start_frame = int(math.floor(warmup_start_ms/frame_duration_ms))
+        if process_start_ms >= video_duration_ms:
+            raise ValueError(f"--process-start-ms ({process_start_ms:.1f} ms) is outside the video duration ({video_duration_ms:.1f} ms).")
         if max_frames is not None:
-            export_end_frame = min(
-                export_end_frame,
-                export_start_frame + max_frames,
-            )
-
+            export_end_frame=min(export_end_frame,export_start_frame+max_frames)
         if export_end_frame <= export_start_frame:
             raise ValueError("The selected frame range is empty.")
-
-        warmup_start_ms = max(0.0, process_start_ms - warmup_ms)
-        warmup_start_frame = int(
-            math.floor(warmup_start_ms / frame_duration_ms)
-        )
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, warmup_start_frame)
 
@@ -641,6 +718,7 @@ def export_blink_filter_logs(
         print(f"Video:          {video_path_obj}")
         print(f"Output dir:     {output_dir_obj}")
         print(f"FPS:            {fps:.3f}")
+        print(f"Timestamp mode: {timestamp_mode}")
         print(
             f"Warm-up frames: {warmup_start_frame} "
             f"to {export_start_frame - 1}"
@@ -676,8 +754,13 @@ def export_blink_filter_logs(
                     "Check the shared_pupil_detection interface."
                 )
 
-            video_time_ms = frame_number * frame_duration_ms
-            time_ms = video_time_ms - time_zero_ms
+            if frame_timestamps_ms is not None:
+                video_time_ms=frame_timestamps_ms[frame_number]
+                frame_end_time_ms=frame_end_timestamps_ms[frame_number]
+            else:
+                video_time_ms=frame_number*frame_duration_ms
+                frame_end_time_ms=video_time_ms+frame_duration_ms
+            time_ms=video_time_ms-time_zero_ms
 
             valid_eye_frame = safe_bool(result["valid_eye_frame"])
             invalid_reason = result.get("invalid_reason")
@@ -701,6 +784,7 @@ def export_blink_filter_logs(
 
                 "frame_number": int(frame_number),
                 "video_time_ms": float(video_time_ms),
+                "frame_end_time_ms": float(frame_end_time_ms),
                 "time_ms": float(time_ms),
 
                 "valid_eye_frame": valid_eye_frame,
