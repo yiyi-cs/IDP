@@ -25,7 +25,7 @@ Datum: 2026-01
 # =================================================================================
 import sys
 from pathlib import Path
-
+import argparse
 # Fuege Projekt-Root zu sys.path hinzu
 _PROJECT_ROOT = Path(__file__).parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -75,15 +75,15 @@ from utils.calibration_mode_manager import CalibrationModes, list_available_mode
 # =================================================================================
 
 # Pfade (ANPASSEN FÜR DEINE UMGEBUNG!)
-BASE_FOLDER = Path(r"/Users/yiyi_mac/IDP_Code/Ergebnisse") # Ergebnisse
+# BASE_FOLDER = Path(r"/Users/yiyi_mac/IDP_Code/Ergebnisse") # Ergebnisse
 SCRIPTS_FOLDER = Path(r"/Users/yiyi_mac/IDP_Code/Skripte") # Skripte
 
 # =================================================================================
 # HELPER-FUNKTIONEN
 # =================================================================================
 
-MASTER_DEFAULTS_FOLDER = BASE_FOLDER / 'master_defaults'
-MASTER_SYNC_LOG_PATH = MASTER_DEFAULTS_FOLDER / 'master_experiment_sync_log.json'
+# self.master_defaults_folder = BASE_FOLDER / 'master_defaults'
+# self.master_sync_log_path = self.master_defaults_folder / 'master_experiment_sync_log.json'
 
 def print_header(text: str, width: int = 70):
     """Gibt formatierten Header aus"""
@@ -195,7 +195,12 @@ class MasterCLI:
     - Fehlerbehandlung
     """
     
-    def __init__(self, base_folder: Path, scripts_folder: Path):
+    def __init__(
+        self,
+        base_folder: Path,
+        scripts_folder: Path,
+        video_root: Path
+    ):
         """
         Args:
             base_folder: Basis-Ordner (Ergebnisse/)
@@ -203,12 +208,18 @@ class MasterCLI:
         """
         self.base_folder = Path(base_folder)
         self.scripts_folder = Path(scripts_folder)
-        
+        self.video_root = Path(video_root)
+
+        self.master_defaults_folder = self.base_folder / 'master_defaults'
+        self.master_sync_log_path = (
+            self.master_defaults_folder / 'master_experiment_sync_log.json'
+        )
+
         # Manager initialisieren
-        self.vp_manager = VPDataManager(base_folder)
-        
+        self.vp_manager = VPDataManager(base_folder, video_root)
+
         print_header("MASTER PIPELINE MANAGER v1.0")
-        
+
         print(f" Basis-Ordner: {base_folder}")
         print(f" Skript-Ordner: {scripts_folder}")
     
@@ -1205,14 +1216,14 @@ class MasterCLI:
             os.environ['PIPELINE_VP_CODE'] = vp_code
             
             # Master-JSON Pfad für Fallback wenn VP-spezifische JSON fehlt
-            if MASTER_SYNC_LOG_PATH.exists():
-                os.environ['PIPELINE_MASTER_SYNC_LOG_PATH'] = str(MASTER_SYNC_LOG_PATH)
-                print(f"    [INFO] Master-JSON verfügbar: {MASTER_SYNC_LOG_PATH.name}")
+            if self.master_sync_log_path.exists():
+                os.environ['PIPELINE_self.master_sync_log_path'] = str(self.master_sync_log_path)
+                print(f"    [INFO] Master-JSON verfügbar: {self.master_sync_log_path.name}")
                 # Master-Calibration Ordner (selber Ordner wie Master-Sync-Log)
-                os.environ['PIPELINE_MASTER_CALIBRATION_FOLDER'] = str(MASTER_DEFAULTS_FOLDER)
-                print(f"    [INFO] Master-Calibration-Folder gesetzt: {MASTER_DEFAULTS_FOLDER}")               
+                os.environ['PIPELINE_MASTER_CALIBRATION_FOLDER'] = str(self.master_defaults_folder)
+                print(f"    [INFO] Master-Calibration-Folder gesetzt: {self.master_defaults_folder}")               
             else:
-                os.environ.pop('PIPELINE_MASTER_SYNC_LOG_PATH', None)
+                os.environ.pop('PIPELINE_self.master_sync_log_path', None)
             
             pipeline = AnalysisPipeline(vp_data, self.scripts_folder)
             
@@ -1312,7 +1323,7 @@ class MasterCLI:
         """
         Fuehrt Analysen mit vordefinierten Cache-Entscheidungen aus (v2.2).
         """
-        global MASTER_SYNC_LOG_PATH 
+        global self.master_sync_log_path 
        
         print_header("AUSFUEHRUNG")
         
@@ -1359,12 +1370,12 @@ class MasterCLI:
             os.environ['PIPELINE_VP_CODE'] = vp_code
             
             # Master-JSON Pfad für Fallback wenn VP-spezifische
-            if MASTER_SYNC_LOG_PATH.exists():
-                os.environ['PIPELINE_MASTER_SYNC_LOG_PATH'] = str(MASTER_SYNC_LOG_PATH)
-                print(f"    [INFO] Master-JSON verfügbar: {MASTER_SYNC_LOG_PATH.name}")
+            if self.master_sync_log_path.exists():
+                os.environ['PIPELINE_self.master_sync_log_path'] = str(self.master_sync_log_path)
+                print(f"    [INFO] Master-JSON verfügbar: {self.master_sync_log_path.name}")
             else:
                 # Entferne Variable falls sie von vorherigem Run existiert
-                os.environ.pop('PIPELINE_MASTER_SYNC_LOG_PATH', None)
+                os.environ.pop('PIPELINE_self.master_sync_log_path', None)
             
             pipeline = AnalysisPipeline(vp_data, self.scripts_folder)
             
@@ -1531,16 +1542,23 @@ class MasterCLI:
 # =================================================================================
 
 def main():
-    """Entry Point"""
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--video-root", type=Path, required=True)
+    args = parser.parse_args()
+
     try:
-        cli = MasterCLI(BASE_FOLDER, SCRIPTS_FOLDER)
+        cli = MasterCLI(
+            args.data_root,
+            SCRIPTS_FOLDER,
+            args.video_root
+        )
         cli.run()
-    
+
     except KeyboardInterrupt:
         print(f"\n\n👋 Programm beendet durch User")
         sys.exit(0)
-    
+
     except Exception as e:
         print(f"\n Kritischer Fehler: {e}")
         import traceback
@@ -1548,5 +1566,17 @@ def main():
         sys.exit(1)
 
 
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--video-root", type=Path, required=True)
+    args = parser.parse_args()
+
+    cli = MasterCLI(
+    args.data_root,
+    SCRIPTS_FOLDER,
+    args.video_root
+)
+    cli.run()
     main()

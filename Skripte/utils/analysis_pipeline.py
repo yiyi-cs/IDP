@@ -1130,7 +1130,7 @@ class AnalysisPipeline:
                 return (True, "OK", pkl_files[0]) if pkl_files else (False, "Keine PKL erstellt", None)
             return False, f"Exit {result.returncode}", None
         except subprocess.TimeoutExpired:
-            return False, "Timeout (600s)", None
+            return False, "Timeout (3600s)", None
         except Exception as e:
             return False, str(e), None
     
@@ -1153,7 +1153,7 @@ class AnalysisPipeline:
                 [sys.executable, str(script)],
                 cwd=self.scripts_folder,
                 env=env,
-                timeout=600
+                timeout=3600
             )
             
             if result.returncode == 0:
@@ -1161,7 +1161,8 @@ class AnalysisPipeline:
                 return (True, "OK", pkl_files[0]) if pkl_files else (False, "Keine ptgaze PKL erstellt", None)
             return False, f"Exit {result.returncode}", None
         except subprocess.TimeoutExpired:
-            return False, "Timeout (600s)", None
+            return False, "Timeout (3600s)", None
+
         except Exception as e:
             return False, str(e), None
 

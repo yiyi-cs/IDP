@@ -250,12 +250,14 @@ class VPDataManager:
     3. Validate: Prüfe Vollständigkeit
     """
     
-    def __init__(self, base_folder: Path):
+    def __init__(self, base_folder: Path, video_root: Optional[Path] = None):
         """
         Args:
             base_folder: Basis-Ordner (z.B. .../Pupillendetektion/Ergebnisse)
         """
         self.base_folder = Path(base_folder)
+        self.video_root = Path(video_root) if video_root is not None else None
+
         
         if not self.base_folder.exists():
             raise FileNotFoundError(f"Basis-Ordner nicht gefunden: {self.base_folder}")
@@ -478,7 +480,14 @@ class VPDataManager:
                 videos['60hz'] = candidates_60[0]
             else:
                 # Prioritaet 2: Im Videos_60 Ordner auf Basis-Ebene
-                videos_60_folder = base_folder / 'Videos_60'
+
+                if self.video_root is not None:
+                    videos_60_folder = self.video_root
+                else:
+                    videos_60_folder = base_folder / 'Videos_60'
+
+                # videos_60_folder = base_folder / 'Videos_60'
+
                 if videos_60_folder.exists():
                     # Suche nach VP-Code im Dateinamen
                     for video_file in videos_60_folder.glob('*.mp4'):
@@ -518,7 +527,13 @@ class VPDataManager:
         
         # Prioritaet 2: Im Videos_25 Ordner auf Basis-Ebene
         if '25hz' not in videos:
-            videos_25_folder = base_folder / 'Videos_25'
+            
+            # videos_25_folder = base_folder / 'Videos_25'
+            if self.video_root is not None:
+                videos_25_folder = self.video_root
+            else:
+                videos_25_folder = base_folder / 'Videos_25'
+                
             if videos_25_folder.exists():
                 # Suche nach VP-Code im Dateinamen
                 for ext in ['*.mp4', '*.MP4']:
