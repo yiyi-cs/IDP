@@ -324,304 +324,402 @@ class PupilDetector:
         self._print_statistics(df)
         
         return df
-    
+
     def _detect_frame(self, frame, frame_number, timestamp_offset_ms):
-        """Detektiert Pupillen + Blink - NUR ROH-WERTE (keine Glättung, keine Spiegelung!)"""
-        
+        """
+        Detektiert Pupille + Blink/Invalid-Eye-State.
+
+        Wichtig:
+        - Zeitlogik bleibt unverändert, damit die bestehende
+        Synchronisation nicht beeinflusst wird.
+        - Alle Blink-/Invalid-Eye-Felder aus RobustPupilDetector
+        werden in debug_1_pupil_data.csv weitergegeben.
+        """
+
         result_dict = self.detector.extract_from_frame(frame)
-        
-        if result_dict['position'] is not None:
+
+        # ------------------------------------------------------------
+        # Gemeinsame Blink-/Filter-Felder
+        # ------------------------------------------------------------
+
+        blink_fields = {
+            # Legacy / compatibility
+            "is_blink": result_dict.get("is_blink", False),
+            "eyes_closed": result_dict.get("eyes_closed", False),
+            "left_ear": result_dict.get("left_ear"),
+            "right_ear": result_dict.get("right_ear"),
+            "avg_ear": result_dict.get("avg_ear"),
+            "blink_count": result_dict.get("blink_count", 0),
+            "frames_below_threshold": result_dict.get(
+                "frames_below_threshold", 0
+            ),
+
+            # New invalid-eye-frame interface
+            "valid_eye_frame": result_dict.get(
+                "valid_eye_frame", False
+            ),
+            "invalid_reason": result_dict.get("invalid_reason"),
+            "is_suspected_blink": result_dict.get(
+                "is_suspected_blink", False
+            ),
+            "is_transition_frame": result_dict.get(
+                "is_transition_frame", False
+            ),
+
+            # EAR diagnostics
+            "left_ear_raw": result_dict.get("left_ear_raw"),
+            "right_ear_raw": result_dict.get("right_ear_raw"),
+
+            "left_closed": result_dict.get("left_closed", False),
+            "right_closed": result_dict.get("right_closed", False),
+
+            "left_closed_raw": result_dict.get(
+                "left_closed_raw", False
+            ),
+            "right_closed_raw": result_dict.get(
+                "right_closed_raw", False
+            ),
+
+            "left_closed_smooth": result_dict.get(
+                "left_closed_smooth", False
+            ),
+            "right_closed_smooth": result_dict.get(
+                "right_closed_smooth", False
+            ),
+
+            "left_threshold": result_dict.get("left_threshold"),
+            "right_threshold": result_dict.get("right_threshold"),
+            "ear_asymmetry": result_dict.get("ear_asymmetry"),
+            "baseline_samples": result_dict.get(
+                "baseline_samples", 0
+            ),
+        }
+
+        # ------------------------------------------------------------
+        # Erfolgreiche Pupillendetektion
+        # ------------------------------------------------------------
+
+        if result_dict["position"] is not None:
+
             result = {
-                'frame': frame_number,
-                'timestamp_ms': frame_number * (1000 / self.fps) + timestamp_offset_ms,
-                
-                # trial_number IMMER vorhanden (auch Legacy!)
-                'trial_number': None,  # Wird in Phase-Modus überschrieben
+                "frame": frame_number,
 
-                # ROH-Positionen (einzelne Augen)
-                'left_pupil_x_px_raw': result_dict['left_position'][0] if result_dict['left_position'] else np.nan,
-                'left_pupil_y_px_raw': result_dict['left_position'][1] if result_dict['left_position'] else np.nan,
-                'right_pupil_x_px_raw': result_dict['right_position'][0] if result_dict['right_position'] else np.nan,
-                'right_pupil_y_px_raw': result_dict['right_position'][1] if result_dict['right_position'] else np.nan,
-                
-                # ROH-Mittelwert (qualitätsgewichtet!)
-                'avg_pupil_x_px_raw': result_dict['position'][0],
-                'avg_pupil_y_px_raw': result_dict['position'][1],
-                
-                # Qualitäts-Metriken
-                'left_quality': result_dict['left_quality'],
-                'right_quality': result_dict['right_quality'],
-                'confidence': result_dict['confidence'],
+                # WICHTIG:
+                # bestehende Pipeline-Zeitachse NICHT verändern.
+                "timestamp_ms":
+                    frame_number * (1000 / self.fps)
+                    + timestamp_offset_ms,
 
-                # Head-Pose
-                'head_yaw': result_dict.get('head_yaw'),
-                'head_pitch': result_dict.get('head_pitch'),
-                'head_roll': result_dict.get('head_roll'),
-                'head_pose_confidence': result_dict.get('head_pose_confidence'),
-                
-                # Blink Detection
-                'is_blink': result_dict.get('is_blink', False),
-                'eyes_closed': result_dict.get('eyes_closed', False),
-                'left_ear': result_dict.get('left_ear'),
-                'right_ear': result_dict.get('right_ear'),
-                'avg_ear': result_dict.get('avg_ear'),
-                'blink_count': result_dict.get('blink_count', 0),
-                
-                'detected': True
+                "trial_number": None,
+
+                # Raw pupil positions
+                "left_pupil_x_px_raw":
+                    result_dict["left_position"][0]
+                    if result_dict["left_position"]
+                    else np.nan,
+
+                "left_pupil_y_px_raw":
+                    result_dict["left_position"][1]
+                    if result_dict["left_position"]
+                    else np.nan,
+
+                "right_pupil_x_px_raw":
+                    result_dict["right_position"][0]
+                    if result_dict["right_position"]
+                    else np.nan,
+
+                "right_pupil_y_px_raw":
+                    result_dict["right_position"][1]
+                    if result_dict["right_position"]
+                    else np.nan,
+
+                "avg_pupil_x_px_raw":
+                    result_dict["position"][0],
+
+                "avg_pupil_y_px_raw":
+                    result_dict["position"][1],
+
+                # Quality
+                "left_quality": result_dict["left_quality"],
+                "right_quality": result_dict["right_quality"],
+                "confidence": result_dict["confidence"],
+
+                # Head pose
+                "head_yaw": result_dict.get("head_yaw"),
+                "head_pitch": result_dict.get("head_pitch"),
+                "head_roll": result_dict.get("head_roll"),
+                "head_pose_confidence":
+                    result_dict.get("head_pose_confidence"),
+
+                "detected": True,
             }
+
+        # ------------------------------------------------------------
+        # Keine gültige Pupillendetektion
+        # ------------------------------------------------------------
+
         else:
+
             result = {
-                'frame': frame_number,
-                'timestamp_ms': frame_number * (1000 / self.fps),
-                'trial_number': None,
-                'left_pupil_x_px_raw': np.nan,
-                'left_pupil_y_px_raw': np.nan,
-                'right_pupil_x_px_raw': np.nan,
-                'right_pupil_y_px_raw': np.nan,
-                'avg_pupil_x_px_raw': np.nan,
-                'avg_pupil_y_px_raw': np.nan,
-                'left_quality': 0.0,
-                'right_quality': 0.0,
-                'confidence': 0.0,
-                'head_yaw': np.nan,
-                'head_pitch': np.nan,
-                'head_roll': np.nan,
-                'head_pose_confidence': 0.0,
-                # Blink Detection (auch bei fehlgeschlagener Detektion)
-                'is_blink': False,
-                'eyes_closed': False,
-                'left_ear': None,
-                'right_ear': None,
-                'avg_ear': None,
-                'blink_count': 0,
-                'detected': False
+                "frame": frame_number,
+
+                # Auch hier bestehende Zeitachse beibehalten.
+                "timestamp_ms":
+                    frame_number * (1000 / self.fps)
+                    + timestamp_offset_ms,
+
+                "trial_number": None,
+
+                "left_pupil_x_px_raw": np.nan,
+                "left_pupil_y_px_raw": np.nan,
+                "right_pupil_x_px_raw": np.nan,
+                "right_pupil_y_px_raw": np.nan,
+                "avg_pupil_x_px_raw": np.nan,
+                "avg_pupil_y_px_raw": np.nan,
+
+                "left_quality": 0.0,
+                "right_quality": 0.0,
+                "confidence": 0.0,
+
+                "head_yaw": np.nan,
+                "head_pitch": np.nan,
+                "head_roll": np.nan,
+                "head_pose_confidence": 0.0,
+
+                "detected": False,
             }
-        
+
+        # ------------------------------------------------------------
+        # Blink / invalid-eye information always propagated
+        # ------------------------------------------------------------
+
+        result.update(blink_fields)
+
         return result
     
-    def _create_visualization(self, frame, row, frame_width, frame_height):
-        """
-        QS-Video: Einheitliches Overlay mit Blink-Detection.
-        
-        LAYOUT-SYSTEM:
-        - overlay_y: Aktuelle Y-Position für nächstes Element
-        - Zeilenabstand: 22px (Text), 25-30px (nach Abschnitten)
-        - Balken-Höhe: 15px
-        - Kasten-Höhe: Dynamisch berechnet am Ende
-        """
-        
-        vis = frame.copy()
-        
-        if not row['detected']:
-            cv2.putText(vis, "NO DETECTION", (50, 50),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+        def _create_visualization(self, frame, row, frame_width, frame_height):
+            """
+            QS-Video: Einheitliches Overlay mit Blink-Detection.
+            
+            LAYOUT-SYSTEM:
+            - overlay_y: Aktuelle Y-Position für nächstes Element
+            - Zeilenabstand: 22px (Text), 25-30px (nach Abschnitten)
+            - Balken-Höhe: 15px
+            - Kasten-Höhe: Dynamisch berechnet am Ende
+            """
+            
+            vis = frame.copy()
+            
+            if not row['detected']:
+                cv2.putText(vis, "NO DETECTION", (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                return vis
+            
+            # ===== EINZELNE PUPILLEN (GRÜN) =====
+            if not np.isnan(row['left_pupil_x_px_raw']):
+                left_x = int(row['left_pupil_x_px_raw'])
+                left_y = int(row['left_pupil_y_px_raw'])
+                cv2.circle(vis, (left_x, left_y), 5, (0, 255, 0), 2)
+                cv2.putText(vis, f"L", (left_x + 8, left_y - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+            
+            if not np.isnan(row['right_pupil_x_px_raw']):
+                right_x = int(row['right_pupil_x_px_raw'])
+                right_y = int(row['right_pupil_y_px_raw'])
+                cv2.circle(vis, (right_x, right_y), 5, (0, 255, 0), 2)
+                cv2.putText(vis, f"R", (right_x + 8, right_y - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+            
+            # ===== MITTELWERT (GELB, GRÖSSER) =====
+            avg_x = int(row['avg_pupil_x_px_raw'])
+            avg_y = int(row['avg_pupil_y_px_raw'])
+            cv2.circle(vis, (avg_x, avg_y), 8, (0, 255, 255), 2)
+            cv2.circle(vis, (avg_x, avg_y), 2, (0, 255, 255), -1)
+            
+            # ═══════════════════════════════════════════════════════════════
+            # INFO-OVERLAY - Erst Inhalt berechnen, dann Kasten zeichnen
+            # ═══════════════════════════════════════════════════════════════
+            
+            # Konstanten für Layout
+            LEFT_MARGIN = 10
+            LINE_HEIGHT = 22        # Standard-Zeilenabstand
+            SECTION_GAP = 8         # Extra-Abstand nach Abschnitten
+            BAR_HEIGHT = 15
+            BOX_WIDTH = 350
+            BOX_PADDING_TOP = 10
+            BOX_PADDING_BOTTOM = 15
+            
+            # Starte Inhalts-Berechnung
+            overlay_y = BOX_PADDING_TOP + 15  # Erste Zeile
+            
+            # ───────────────────────────────────────────────────────────────
+            # BLOCK 1: Frame + Position
+            # ───────────────────────────────────────────────────────────────
+            content_start_y = overlay_y
+            
+            # Zeile 1: Frame
+            frame_text = f"Frame: {int(row['frame'])}"
+            overlay_y += LINE_HEIGHT
+            
+            # Zeile 2: Pupil Position
+            pupil_text = f"Pupil: ({row['avg_pupil_x_px_raw']:.1f}, {row['avg_pupil_y_px_raw']:.1f})"
+            overlay_y += LINE_HEIGHT
+            
+            # Zeile 3: Quality
+            quality_text = f"Quality L: {row['left_quality']:.2f}  R: {row['right_quality']:.2f}"
+            overlay_y += LINE_HEIGHT + SECTION_GAP
+            
+            # ───────────────────────────────────────────────────────────────
+            # BLOCK 2: EAR + Balken
+            # ───────────────────────────────────────────────────────────────
+            
+            ear_value = row.get('avg_ear')
+            threshold = EAR_BLINK_THRESHOLD
+            
+            if ear_value is not None:
+                # EAR Text
+                overlay_y += LINE_HEIGHT
+                
+                # EAR Balken
+                bar_y = overlay_y
+                overlay_y += BAR_HEIGHT + SECTION_GAP
+            
+            # ───────────────────────────────────────────────────────────────
+            # BLOCK 3: Blink Counter
+            # ───────────────────────────────────────────────────────────────
+            
+            overlay_y += LINE_HEIGHT
+            
+            # ───────────────────────────────────────────────────────────────
+            # BLOCK 4: Head-Pose (optional)
+            # ───────────────────────────────────────────────────────────────
+            
+            has_head_pose = (row.get('head_yaw') is not None and 
+                            not np.isnan(row.get('head_yaw', np.nan)))
+            if has_head_pose:
+                overlay_y += LINE_HEIGHT
+            
+            # ───────────────────────────────────────────────────────────────
+            # BLOCK 5: Status-Warnungen (nur wenn aktiv)
+            # ───────────────────────────────────────────────────────────────
+            
+            if row.get('eyes_closed', False):
+                overlay_y += LINE_HEIGHT + 3
+            
+            if row.get('is_blink', False):
+                overlay_y += LINE_HEIGHT + 3
+            
+            # ═══════════════════════════════════════════════════════════════
+            # JETZT KASTEN ZEICHNEN (mit berechneter Höhe)
+            # ═══════════════════════════════════════════════════════════════
+            
+            box_height = overlay_y + BOX_PADDING_BOTTOM
+            
+            cv2.rectangle(vis, (5, 5), (BOX_WIDTH, box_height), (0, 0, 0), -1)
+            cv2.rectangle(vis, (5, 5), (BOX_WIDTH, box_height), (255, 255, 255), 2)
+            
+            # ═══════════════════════════════════════════════════════════════
+            # JETZT INHALT ZEICHNEN
+            # ═══════════════════════════════════════════════════════════════
+            
+            overlay_y = BOX_PADDING_TOP + 15
+            
+            # Block 1: Frame + Position
+            cv2.putText(vis, frame_text, (LEFT_MARGIN, overlay_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            overlay_y += LINE_HEIGHT
+            
+            cv2.putText(vis, pupil_text, (LEFT_MARGIN, overlay_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            overlay_y += LINE_HEIGHT
+            
+            cv2.putText(vis, quality_text, (LEFT_MARGIN, overlay_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            overlay_y += LINE_HEIGHT + SECTION_GAP
+            
+            # Block 2: EAR + Balken
+            if ear_value is not None:
+                eyes_closed = row.get('eyes_closed', False)
+                ear_color = (0, 0, 255) if eyes_closed else (0, 255, 0)
+                
+                cv2.putText(vis, f"EAR: {ear_value:.3f} (Thresh: {threshold})", 
+                        (LEFT_MARGIN, overlay_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, ear_color, 1)
+                overlay_y += LINE_HEIGHT
+                
+                # EAR-Balken
+                ear_normalized = min(ear_value / 0.4, 1.0)
+                bar_width = int(300 * ear_normalized)
+                
+                cv2.rectangle(vis, (LEFT_MARGIN, overlay_y), 
+                            (LEFT_MARGIN + 300, overlay_y + BAR_HEIGHT), (50, 50, 50), -1)
+                cv2.rectangle(vis, (LEFT_MARGIN, overlay_y), 
+                            (LEFT_MARGIN + bar_width, overlay_y + BAR_HEIGHT), ear_color, -1)
+                
+                # Threshold-Linie
+                threshold_x = LEFT_MARGIN + int(300 * (threshold / 0.4))
+                cv2.line(vis, (threshold_x, overlay_y), 
+                        (threshold_x, overlay_y + BAR_HEIGHT), (0, 255, 255), 2)
+                cv2.rectangle(vis, (LEFT_MARGIN, overlay_y), 
+                            (LEFT_MARGIN + 300, overlay_y + BAR_HEIGHT), (255, 255, 255), 1)
+                
+                overlay_y += BAR_HEIGHT + SECTION_GAP + 14
+            
+            # Block 3: Blink Counter
+            blink_count = row.get('blink_count', 0)
+            cv2.putText(vis, f"Blinks: {blink_count}", 
+                    (LEFT_MARGIN, overlay_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            overlay_y += LINE_HEIGHT
+            
+            # Block 4: Head-Pose
+            if has_head_pose:
+                cv2.putText(vis, f"Head: Y:{row['head_yaw']:.1f} P:{row['head_pitch']:.1f} R:{row['head_roll']:.1f}", 
+                        (LEFT_MARGIN, overlay_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+                overlay_y += LINE_HEIGHT
+            
+            # Block 5: Status-Warnungen
+            if row.get('eyes_closed', False):
+                cv2.putText(vis, ">>> EYES CLOSED <<<", 
+                        (LEFT_MARGIN, overlay_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                overlay_y += LINE_HEIGHT + 3
+            
+            if row.get('is_blink', False):
+                cv2.putText(vis, ">>> BLINK DETECTED <<<", 
+                        (LEFT_MARGIN, overlay_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            
             return vis
         
-        # ===== EINZELNE PUPILLEN (GRÜN) =====
-        if not np.isnan(row['left_pupil_x_px_raw']):
-            left_x = int(row['left_pupil_x_px_raw'])
-            left_y = int(row['left_pupil_y_px_raw'])
-            cv2.circle(vis, (left_x, left_y), 5, (0, 255, 0), 2)
-            cv2.putText(vis, f"L", (left_x + 8, left_y - 8),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-        
-        if not np.isnan(row['right_pupil_x_px_raw']):
-            right_x = int(row['right_pupil_x_px_raw'])
-            right_y = int(row['right_pupil_y_px_raw'])
-            cv2.circle(vis, (right_x, right_y), 5, (0, 255, 0), 2)
-            cv2.putText(vis, f"R", (right_x + 8, right_y - 8),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-        
-        # ===== MITTELWERT (GELB, GRÖSSER) =====
-        avg_x = int(row['avg_pupil_x_px_raw'])
-        avg_y = int(row['avg_pupil_y_px_raw'])
-        cv2.circle(vis, (avg_x, avg_y), 8, (0, 255, 255), 2)
-        cv2.circle(vis, (avg_x, avg_y), 2, (0, 255, 255), -1)
-        
-        # ═══════════════════════════════════════════════════════════════
-        # INFO-OVERLAY - Erst Inhalt berechnen, dann Kasten zeichnen
-        # ═══════════════════════════════════════════════════════════════
-        
-        # Konstanten für Layout
-        LEFT_MARGIN = 10
-        LINE_HEIGHT = 22        # Standard-Zeilenabstand
-        SECTION_GAP = 8         # Extra-Abstand nach Abschnitten
-        BAR_HEIGHT = 15
-        BOX_WIDTH = 350
-        BOX_PADDING_TOP = 10
-        BOX_PADDING_BOTTOM = 15
-        
-        # Starte Inhalts-Berechnung
-        overlay_y = BOX_PADDING_TOP + 15  # Erste Zeile
-        
-        # ───────────────────────────────────────────────────────────────
-        # BLOCK 1: Frame + Position
-        # ───────────────────────────────────────────────────────────────
-        content_start_y = overlay_y
-        
-        # Zeile 1: Frame
-        frame_text = f"Frame: {int(row['frame'])}"
-        overlay_y += LINE_HEIGHT
-        
-        # Zeile 2: Pupil Position
-        pupil_text = f"Pupil: ({row['avg_pupil_x_px_raw']:.1f}, {row['avg_pupil_y_px_raw']:.1f})"
-        overlay_y += LINE_HEIGHT
-        
-        # Zeile 3: Quality
-        quality_text = f"Quality L: {row['left_quality']:.2f}  R: {row['right_quality']:.2f}"
-        overlay_y += LINE_HEIGHT + SECTION_GAP
-        
-        # ───────────────────────────────────────────────────────────────
-        # BLOCK 2: EAR + Balken
-        # ───────────────────────────────────────────────────────────────
-        
-        ear_value = row.get('avg_ear')
-        threshold = EAR_BLINK_THRESHOLD
-        
-        if ear_value is not None:
-            # EAR Text
-            overlay_y += LINE_HEIGHT
+        def _print_statistics(self, df):
+            """Finale Statistik"""
             
-            # EAR Balken
-            bar_y = overlay_y
-            overlay_y += BAR_HEIGHT + SECTION_GAP
-        
-        # ───────────────────────────────────────────────────────────────
-        # BLOCK 3: Blink Counter
-        # ───────────────────────────────────────────────────────────────
-        
-        overlay_y += LINE_HEIGHT
-        
-        # ───────────────────────────────────────────────────────────────
-        # BLOCK 4: Head-Pose (optional)
-        # ───────────────────────────────────────────────────────────────
-        
-        has_head_pose = (row.get('head_yaw') is not None and 
-                        not np.isnan(row.get('head_yaw', np.nan)))
-        if has_head_pose:
-            overlay_y += LINE_HEIGHT
-        
-        # ───────────────────────────────────────────────────────────────
-        # BLOCK 5: Status-Warnungen (nur wenn aktiv)
-        # ───────────────────────────────────────────────────────────────
-        
-        if row.get('eyes_closed', False):
-            overlay_y += LINE_HEIGHT + 3
-        
-        if row.get('is_blink', False):
-            overlay_y += LINE_HEIGHT + 3
-        
-        # ═══════════════════════════════════════════════════════════════
-        # JETZT KASTEN ZEICHNEN (mit berechneter Höhe)
-        # ═══════════════════════════════════════════════════════════════
-        
-        box_height = overlay_y + BOX_PADDING_BOTTOM
-        
-        cv2.rectangle(vis, (5, 5), (BOX_WIDTH, box_height), (0, 0, 0), -1)
-        cv2.rectangle(vis, (5, 5), (BOX_WIDTH, box_height), (255, 255, 255), 2)
-        
-        # ═══════════════════════════════════════════════════════════════
-        # JETZT INHALT ZEICHNEN
-        # ═══════════════════════════════════════════════════════════════
-        
-        overlay_y = BOX_PADDING_TOP + 15
-        
-        # Block 1: Frame + Position
-        cv2.putText(vis, frame_text, (LEFT_MARGIN, overlay_y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        overlay_y += LINE_HEIGHT
-        
-        cv2.putText(vis, pupil_text, (LEFT_MARGIN, overlay_y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-        overlay_y += LINE_HEIGHT
-        
-        cv2.putText(vis, quality_text, (LEFT_MARGIN, overlay_y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        overlay_y += LINE_HEIGHT + SECTION_GAP
-        
-        # Block 2: EAR + Balken
-        if ear_value is not None:
-            eyes_closed = row.get('eyes_closed', False)
-            ear_color = (0, 0, 255) if eyes_closed else (0, 255, 0)
+            print(f"\n{'='*70}")
+            print("STATISTIK")
+            print(f"{'='*70}\n")
             
-            cv2.putText(vis, f"EAR: {ear_value:.3f} (Thresh: {threshold})", 
-                       (LEFT_MARGIN, overlay_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, ear_color, 1)
-            overlay_y += LINE_HEIGHT
+            total = len(df)
+            detected = df['detected'].sum()
+            rate = (detected / total) * 100
             
-            # EAR-Balken
-            ear_normalized = min(ear_value / 0.4, 1.0)
-            bar_width = int(300 * ear_normalized)
+            print(f"Detection Rate: {detected}/{total} ({rate:.1f}%)\n")
             
-            cv2.rectangle(vis, (LEFT_MARGIN, overlay_y), 
-                         (LEFT_MARGIN + 300, overlay_y + BAR_HEIGHT), (50, 50, 50), -1)
-            cv2.rectangle(vis, (LEFT_MARGIN, overlay_y), 
-                         (LEFT_MARGIN + bar_width, overlay_y + BAR_HEIGHT), ear_color, -1)
-            
-            # Threshold-Linie
-            threshold_x = LEFT_MARGIN + int(300 * (threshold / 0.4))
-            cv2.line(vis, (threshold_x, overlay_y), 
-                    (threshold_x, overlay_y + BAR_HEIGHT), (0, 255, 255), 2)
-            cv2.rectangle(vis, (LEFT_MARGIN, overlay_y), 
-                         (LEFT_MARGIN + 300, overlay_y + BAR_HEIGHT), (255, 255, 255), 1)
-            
-            overlay_y += BAR_HEIGHT + SECTION_GAP + 14
+            if detected > 0:
+                print(f"ROH-Daten (ungefiltert):")
+                print(f"  Mean X: {df['avg_pupil_x_px_raw'].mean():.1f} px")
+                print(f"  Std X:  {df['avg_pupil_x_px_raw'].std():.2f} px")
+                print(f"  Range:  {df['avg_pupil_x_px_raw'].max() - df['avg_pupil_x_px_raw'].min():.2f} px\n")
+                
+                print(f"Qualität:")
+                print(f"  Avg Confidence: {df['confidence'].mean():.2f}")
+                print(f"  Avg L Quality:  {df['left_quality'].mean():.2f}")
+                print(f"  Avg R Quality:  {df['right_quality'].mean():.2f}")
         
-        # Block 3: Blink Counter
-        blink_count = row.get('blink_count', 0)
-        cv2.putText(vis, f"Blinks: {blink_count}", 
-                   (LEFT_MARGIN, overlay_y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        overlay_y += LINE_HEIGHT
-        
-        # Block 4: Head-Pose
-        if has_head_pose:
-            cv2.putText(vis, f"Head: Y:{row['head_yaw']:.1f} P:{row['head_pitch']:.1f} R:{row['head_roll']:.1f}", 
-                       (LEFT_MARGIN, overlay_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-            overlay_y += LINE_HEIGHT
-        
-        # Block 5: Status-Warnungen
-        if row.get('eyes_closed', False):
-            cv2.putText(vis, ">>> EYES CLOSED <<<", 
-                       (LEFT_MARGIN, overlay_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            overlay_y += LINE_HEIGHT + 3
-        
-        if row.get('is_blink', False):
-            cv2.putText(vis, ">>> BLINK DETECTED <<<", 
-                       (LEFT_MARGIN, overlay_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        
-        return vis
-    
-    def _print_statistics(self, df):
-        """Finale Statistik"""
-        
-        print(f"\n{'='*70}")
-        print("STATISTIK")
-        print(f"{'='*70}\n")
-        
-        total = len(df)
-        detected = df['detected'].sum()
-        rate = (detected / total) * 100
-        
-        print(f"Detection Rate: {detected}/{total} ({rate:.1f}%)\n")
-        
-        if detected > 0:
-            print(f"ROH-Daten (ungefiltert):")
-            print(f"  Mean X: {df['avg_pupil_x_px_raw'].mean():.1f} px")
-            print(f"  Std X:  {df['avg_pupil_x_px_raw'].std():.2f} px")
-            print(f"  Range:  {df['avg_pupil_x_px_raw'].max() - df['avg_pupil_x_px_raw'].min():.2f} px\n")
-            
-            print(f"Qualität:")
-            print(f"  Avg Confidence: {df['confidence'].mean():.2f}")
-            print(f"  Avg L Quality:  {df['left_quality'].mean():.2f}")
-            print(f"  Avg R Quality:  {df['right_quality'].mean():.2f}")
-    
-    def close(self):
-        """Schließt Detektor"""
-        self.detector.close()
+        def close(self):
+            """Schließt Detektor"""
+            self.detector.close()
 
 # ==================== MAIN ====================
 
