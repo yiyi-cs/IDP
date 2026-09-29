@@ -691,19 +691,18 @@ class AnalysisPipeline:
             print(f"\n{'---'*23}")
             print("[2/11] debug_1_video_analysis.py (MediaPipe)")
             print(f"{'---'*23}")
-            
-            matching_run = scanner.find_matching_run(config, 'debug_1_mediapipe', current_run_folder)
-            
-            if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'debug_1_mediapipe'):
-                print(f"      [OK] debug_1_mediapipe aus Cache")
-            else:
-                success, msg = self._run_debug_1_mediapipe(config, output_dir)
-                if not success:
-                    failed_step = 'debug_1_mediapipe'
-                    error_message = msg
-                    raise RuntimeError(f"debug_1_mediapipe failed: {msg}")
-                print(f"      [OK] debug_1_mediapipe erfolgreich")
-            
+
+
+            success, msg = self._run_step_with_cache(
+                'debug_1_mediapipe', config, output_dir, scanner,
+                self._run_debug_1_mediapipe, config, output_dir
+            )
+            if not success:
+                failed_step = 'debug_1_mediapipe'
+                error_message = msg
+                raise RuntimeError(f"debug_1_mediapipe failed: {msg}")
+            print(f"      [OK] debug_1_mediapipe {msg}")
+
             completed_steps.append('debug_1_mediapipe')
             
             # =========================================================
@@ -714,19 +713,18 @@ class AnalysisPipeline:
                 print(f"\n{'---'*23}")
                 print("[3/11] debug_1_ptgaze.py (ptgaze)")
                 print(f"{'---'*23}")
-                
-                matching_run = scanner.find_matching_run(config, 'debug_1_ptgaze', current_run_folder)
-            
-                if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'debug_1_ptgaze'):
-                    print(f"      [OK] debug_1_ptgaze aus Cache")
-                else:
-                    success, msg = self._run_debug_1_ptgaze(config, output_dir)
-                    if not success:
-                        failed_step = 'debug_1_ptgaze'
-                        error_message = msg
-                        raise RuntimeError(f"debug_1_ptgaze failed: {msg}")
-                    print(f"      [OK] debug_1_ptgaze erfolgreich")
-                
+
+
+                success, msg = self._run_step_with_cache(
+                    'debug_1_ptgaze', config, output_dir, scanner,
+                    self._run_debug_1_ptgaze, config, output_dir
+                )
+                if not success:
+                    failed_step = 'debug_1_ptgaze'
+                    error_message = msg
+                    raise RuntimeError(f"debug_1_ptgaze failed: {msg}")
+                print(f"      [OK] debug_1_ptgaze {msg}")
+
                 completed_steps.append('debug_1_ptgaze')
 
             else:
@@ -741,7 +739,9 @@ class AnalysisPipeline:
                 print("[4/11] offline_calibration.py (MediaPipe)")
                 print(f"{'---'*23}")
                 
-                matching_run = scanner.find_matching_run(config, 'offline_calibration', current_run_folder)
+                matching_run = None
+                if config.cache_decisions and config.cache_decisions.use_cache_for('offline_calibration'):
+                    matching_run = config.cache_decisions.decisions['offline_calibration'].source_path
                 
                 if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'offline_calibration'):
                     pkl_files = list(output_dir.glob('calibration_*.pkl'))
@@ -778,7 +778,9 @@ class AnalysisPipeline:
                 print("[5/11] offline_calibration_ptgaze.py (ptgaze)")
                 print(f"{'---'*23}")
                 
-                matching_run = scanner.find_matching_run(config, 'offline_calibration_ptgaze', current_run_folder)
+                matching_run = None
+                if config.cache_decisions and config.cache_decisions.use_cache_for('offline_calibration_ptgaze'):
+                    matching_run = config.cache_decisions.decisions['offline_calibration_ptgaze'].source_path
                 
                 if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'offline_calibration_ptgaze'):
                     pkl_files = list(output_dir.glob('calibration_ptgaze_*.pkl'))
@@ -813,19 +815,18 @@ class AnalysisPipeline:
                 print(f"\n{'---'*23}")
                 print("[6/11] debug_3_eyetracker_load.py")
                 print(f"{'---'*23}")
-                
-                matching_run = scanner.find_matching_run(config, 'debug_3', current_run_folder)
-                
-                if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'debug_3'):
-                    print(f"      [OK] debug_3 aus Cache")
-                else:
-                    success, msg = self._run_debug_3(config, output_dir)
-                    if not success:
-                        failed_step = 'debug_3'
-                        error_message = msg
-                        raise RuntimeError(f"debug_3 failed: {msg}")
-                    print(f"      [OK] debug_3 erfolgreich")
-                
+
+
+                success, msg = self._run_step_with_cache(
+                    'debug_3', config, output_dir, scanner,
+                    self._run_debug_3, config, output_dir
+                )
+                if not success:
+                    failed_step = 'debug_3'
+                    error_message = msg
+                    raise RuntimeError(f"debug_3 failed: {msg}")
+                print(f"      [OK] debug_3 {msg}")
+
                 completed_steps.append('debug_3')
             else:
                 print(f"\n[SKIP] debug_3 (Modus 1 = kein EyeLink)")
@@ -838,19 +839,18 @@ class AnalysisPipeline:
                 print(f"\n{'---'*23}")
                 print("[7/11] debug_4_synchronization.py")
                 print(f"{'---'*23}")
-                
-                matching_run = scanner.find_matching_run(config, 'debug_4', current_run_folder)
-                
-                if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'debug_4'):
-                    print(f"      [OK] debug_4 aus Cache")
-                else:
-                    success, msg = self._run_debug_4(config, output_dir)
-                    if not success:
-                        failed_step = 'debug_4'
-                        error_message = msg
-                        raise RuntimeError(f"debug_4 failed: {msg}")
-                    print(f"      [OK] debug_4 erfolgreich")
-                
+
+
+                success, msg = self._run_step_with_cache(
+                    'debug_4', config, output_dir, scanner,
+                    self._run_debug_4, config, output_dir
+                )
+                if not success:
+                    failed_step = 'debug_4'
+                    error_message = msg
+                    raise RuntimeError(f"debug_4 failed: {msg}")
+                print(f"      [OK] debug_4 {msg}")
+
                 completed_steps.append('debug_4')
             else:
                 print(f"\n[SKIP] debug_4 (Modus 1 = keine Synchronisation)")
@@ -862,19 +862,18 @@ class AnalysisPipeline:
             print(f"\n{'---'*23}")
             print("[8/11] debug_5_partial_calibration.py (MediaPipe)")
             print(f"{'---'*23}")
-            
-            matching_run = scanner.find_matching_run(config, 'debug_5_mediapipe', current_run_folder)
-            
-            if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'debug_5_mediapipe'):
-                print(f"      [OK] debug_5_mediapipe aus Cache")
-            else:
-                success, msg = self._run_debug_5_mediapipe(config, output_dir, calib_pkl_mediapipe)
-                if not success:
-                    failed_step = 'debug_5_mediapipe'
-                    error_message = msg
-                    raise RuntimeError(f"debug_5_mediapipe failed: {msg}")
-                print(f"      [OK] debug_5_mediapipe erfolgreich")
-            
+
+
+            success, msg = self._run_step_with_cache(
+                'debug_5_mediapipe', config, output_dir, scanner,
+                self._run_debug_5_mediapipe, config, output_dir, calib_pkl_mediapipe
+            )
+            if not success:
+                failed_step = 'debug_5_mediapipe'
+                error_message = msg
+                raise RuntimeError(f"debug_5_mediapipe failed: {msg}")
+            print(f"      [OK] debug_5_mediapipe {msg}")
+
             completed_steps.append('debug_5_mediapipe')
             
             # =========================================================
@@ -886,19 +885,18 @@ class AnalysisPipeline:
                 print("[9/11] debug_5_ptgaze.py (ptgaze)")
 
                 print(f"{'---'*23}")
-                
-                matching_run = scanner.find_matching_run(config, 'debug_5_ptgaze', current_run_folder)
-                
-                if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'debug_5_ptgaze'):
-                    print(f"      [OK] debug_5_ptgaze aus Cache")
-                else:
-                    success, msg = self._run_debug_5_ptgaze(config, output_dir, calib_pkl_ptgaze)
-                    if not success:
-                        failed_step = 'debug_5_ptgaze'
-                        error_message = msg
-                        raise RuntimeError(f"debug_5_ptgaze failed: {msg}")
-                    print(f"      [OK] debug_5_ptgaze erfolgreich")
-                
+
+
+                success, msg = self._run_step_with_cache(
+                    'debug_5_ptgaze', config, output_dir, scanner,
+                    self._run_debug_5_ptgaze, config, output_dir, calib_pkl_ptgaze
+                )
+                if not success:
+                    failed_step = 'debug_5_ptgaze'
+                    error_message = msg
+                    raise RuntimeError(f"debug_5_ptgaze failed: {msg}")
+                print(f"      [OK] debug_5_ptgaze {msg}")
+
                 completed_steps.append('debug_5_ptgaze')
             else:
                 print(f"\n[SKIP] debug_5_ptgaze (kein ptgaze PKL)")
