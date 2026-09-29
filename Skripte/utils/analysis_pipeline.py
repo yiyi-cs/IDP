@@ -911,25 +911,13 @@ class AnalysisPipeline:
             print("[10/11] Fixation Detection (MediaPipe / ptgaze)")
             print(f"{'---'*23}")
 
-            matching_run = scanner.find_matching_run(
-                config, 'fixation_detection', current_run_folder
-            )
+            success, msg = self._run_fixation_detection(config, output_dir)
+            if not success:
+                failed_step = 'fixation_detection'
+                error_message = msg
+                raise RuntimeError(f"fixation_detection failed: {msg}")
 
-            if (
-                matching_run is not None
-                and scanner.copy_step_outputs(
-                    matching_run, output_dir, 'fixation_detection'
-                )
-            ):
-                print(f"      [OK] fixation_detection aus Cache")
-            else:
-                success, msg = self._run_fixation_detection(config, output_dir)
-                if not success:
-                    failed_step = 'fixation_detection'
-                    error_message = msg
-                    raise RuntimeError(f"fixation_detection failed: {msg}")
-                print(f"      [OK] fixation_detection erfolgreich")
-
+            print(f"      [OK] fixation_detection erfolgreich")
             completed_steps.append('fixation_detection')
 
             # =========================================================
@@ -940,17 +928,15 @@ class AnalysisPipeline:
             print("[11/11] debug_6_extended_comparison.py")
             print(f"{'---'*23}")
 
-            matching_run = scanner.find_matching_run(config, 'debug_6', current_run_folder)
-
-            if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'debug_6'):
-                print(f"      [OK] debug_6 aus Cache")
-            else:
-                success, msg = self._run_debug_6(config, output_dir)
-                if not success:
-                    failed_step = 'debug_6'
-                    error_message = msg
-                    raise RuntimeError(f"debug_6 failed: {msg}")
-                print(f"      [OK] debug_6 erfolgreich")
+            success, msg = self._run_step_with_cache(
+                'debug_6', config, output_dir, scanner,
+                self._run_debug_6, config, output_dir
+            )
+            if not success:
+                failed_step = 'debug_6'
+                error_message = msg
+                raise RuntimeError(f"debug_6 failed: {msg}")
+            print(f"      [OK] debug_6 {msg}")
 
             completed_steps.append('debug_6')
                     

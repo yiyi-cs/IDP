@@ -68,6 +68,12 @@ else:
     )
 
 
+PIPELINE_METHODS = os.environ.get(
+    "PIPELINE_METHODS",
+    "both",
+).lower()
+
+
 # =============================================================================
 # FINAL FROZEN CONFIG
 # =============================================================================
@@ -394,22 +400,32 @@ def main():
     # Available calibrated gaze methods
     # -----------------------------------------------------------------
 
-    methods = [
+    methods = []
 
-        (
-            "mediapipe",
-            OUTPUT_BASE_DIR
-            / "debug_5_pupil_data_calibrated.csv",
-            "debug_6_mediapipe",
-        ),
+    if PIPELINE_METHODS in ["mediapipe", "both"]:
+        methods.append(
+            (
+                "mediapipe",
+                OUTPUT_BASE_DIR
+                / "debug_5_pupil_data_calibrated.csv",
+                "debug_6_mediapipe",
+            )
+        )
 
-        (
-            "ptgaze",
-            OUTPUT_BASE_DIR
-            / "debug_5_ptgaze_calibrated.csv",
-            "debug_6_ptgaze",
-        ),
-    ]
+    if PIPELINE_METHODS in ["ptgaze", "both"]:
+        methods.append(
+            (
+                "ptgaze",
+                OUTPUT_BASE_DIR
+                / "debug_5_ptgaze_calibrated.csv",
+                "debug_6_ptgaze",
+            )
+        )
+
+    if not methods:
+        raise ValueError(
+            f"Unknown PIPELINE_METHODS: {PIPELINE_METHODS}"
+        )
 
     completed = []
     skipped = []
