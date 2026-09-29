@@ -18,7 +18,7 @@ debug_0 -> debug_1_mediapipe -> debug_1_ptgaze ->
 offline_calibration -> offline_calibration_ptgaze ->
 debug_3 -> debug_4 -> 
 debug_5_mediapipe -> debug_5_ptgaze -> 
-debug_6
+fixation_detection -> debug_6
 
 Version: 2.0
 Datum: 2025-01
@@ -643,7 +643,7 @@ class AnalysisPipeline:
             # =========================================================
             
             print(f"\n{'---'*23}")
-            print("[1/10] debug_0_phase_detection.py")
+            print("[1/11] debug_0_phase_detection.py")
             print(f"{'---'*23}")
             
             # Pruefe Cache-Entscheidung (v2.1)
@@ -689,7 +689,7 @@ class AnalysisPipeline:
             # =========================================================
             
             print(f"\n{'---'*23}")
-            print("[2/10] debug_1_video_analysis.py (MediaPipe)")
+            print("[2/11] debug_1_video_analysis.py (MediaPipe)")
             print(f"{'---'*23}")
             
             matching_run = scanner.find_matching_run(config, 'debug_1_mediapipe', current_run_folder)
@@ -712,7 +712,7 @@ class AnalysisPipeline:
             
             if config.methods in ['ptgaze', 'both']:
                 print(f"\n{'---'*23}")
-                print("[3/10] debug_1_ptgaze.py (ptgaze)")
+                print("[3/11] debug_1_ptgaze.py (ptgaze)")
                 print(f"{'---'*23}")
                 
                 matching_run = scanner.find_matching_run(config, 'debug_1_ptgaze', current_run_folder)
@@ -738,7 +738,7 @@ class AnalysisPipeline:
             
             if config.create_calibration:
                 print(f"\n{'---'*23}")
-                print("[4/10] offline_calibration.py (MediaPipe)")
+                print("[4/11] offline_calibration.py (MediaPipe)")
                 print(f"{'---'*23}")
                 
                 matching_run = scanner.find_matching_run(config, 'offline_calibration', current_run_folder)
@@ -775,7 +775,7 @@ class AnalysisPipeline:
             
             if config.create_calibration and config.methods in ['ptgaze', 'both']:
                 print(f"\n{'---'*23}")
-                print("[5/10] offline_calibration_ptgaze.py (ptgaze)")
+                print("[5/11] offline_calibration_ptgaze.py (ptgaze)")
                 print(f"{'---'*23}")
                 
                 matching_run = scanner.find_matching_run(config, 'offline_calibration_ptgaze', current_run_folder)
@@ -811,7 +811,7 @@ class AnalysisPipeline:
             
             if config.analysis_mode == 2:
                 print(f"\n{'---'*23}")
-                print("[6/10] debug_3_eyetracker_load.py")
+                print("[6/11] debug_3_eyetracker_load.py")
                 print(f"{'---'*23}")
                 
                 matching_run = scanner.find_matching_run(config, 'debug_3', current_run_folder)
@@ -836,7 +836,7 @@ class AnalysisPipeline:
             
             if config.analysis_mode == 2:
                 print(f"\n{'---'*23}")
-                print("[7/10] debug_4_synchronization.py")
+                print("[7/11] debug_4_synchronization.py")
                 print(f"{'---'*23}")
                 
                 matching_run = scanner.find_matching_run(config, 'debug_4', current_run_folder)
@@ -860,7 +860,7 @@ class AnalysisPipeline:
             # =========================================================
             
             print(f"\n{'---'*23}")
-            print("[8/10] debug_5_partial_calibration.py (MediaPipe)")
+            print("[8/11] debug_5_partial_calibration.py (MediaPipe)")
             print(f"{'---'*23}")
             
             matching_run = scanner.find_matching_run(config, 'debug_5_mediapipe', current_run_folder)
@@ -883,7 +883,7 @@ class AnalysisPipeline:
             
             if calib_pkl_ptgaze is not None and config.methods in ['ptgaze', 'both']:
                 print(f"\n{'---'*23}")
-                print("[9/10] debug_5_ptgaze.py (ptgaze)")
+                print("[9/11] debug_5_ptgaze.py (ptgaze)")
 
                 print(f"{'---'*23}")
                 
@@ -904,15 +904,44 @@ class AnalysisPipeline:
                 print(f"\n[SKIP] debug_5_ptgaze (kein ptgaze PKL)")
             
             # =========================================================
-            # SCHRITT 10: debug_6 (3-Wege-Vergleich)
+            # SCHRITT 10: Fixation Detection
             # =========================================================
-            
+
             print(f"\n{'---'*23}")
-            print("[10/10] debug_6_extended_comparison.py")
+            print("[10/11] Fixation Detection (MediaPipe / ptgaze)")
             print(f"{'---'*23}")
-            
+
+            matching_run = scanner.find_matching_run(
+                config, 'fixation_detection', current_run_folder
+            )
+
+            if (
+                matching_run is not None
+                and scanner.copy_step_outputs(
+                    matching_run, output_dir, 'fixation_detection'
+                )
+            ):
+                print(f"      [OK] fixation_detection aus Cache")
+            else:
+                success, msg = self._run_fixation_detection(config, output_dir)
+                if not success:
+                    failed_step = 'fixation_detection'
+                    error_message = msg
+                    raise RuntimeError(f"fixation_detection failed: {msg}")
+                print(f"      [OK] fixation_detection erfolgreich")
+
+            completed_steps.append('fixation_detection')
+
+            # =========================================================
+            # SCHRITT 11: debug_6 (3-Wege-Vergleich)
+            # =========================================================
+
+            print(f"\n{'---'*23}")
+            print("[11/11] debug_6_extended_comparison.py")
+            print(f"{'---'*23}")
+
             matching_run = scanner.find_matching_run(config, 'debug_6', current_run_folder)
-            
+
             if matching_run is not None and scanner.copy_step_outputs(matching_run, output_dir, 'debug_6'):
                 print(f"      [OK] debug_6 aus Cache")
             else:
@@ -922,7 +951,7 @@ class AnalysisPipeline:
                     error_message = msg
                     raise RuntimeError(f"debug_6 failed: {msg}")
                 print(f"      [OK] debug_6 erfolgreich")
-            
+
             completed_steps.append('debug_6')
                     
             # =========================================================
@@ -1264,6 +1293,28 @@ class AnalysisPipeline:
         except Exception as e:
             return False, str(e)
     
+    def _run_fixation_detection(self, config: RunConfiguration, output_dir: Path) -> tuple:
+        """Fuehrt integrierte Fixation Detection fuer verfuegbare Gaze-Methoden aus."""
+
+        script = self.scripts_folder / 'fixation' / 'run_fixation_detection.py'
+        env = self._create_base_env(config, output_dir)
+
+        print(f"      >> Fuehre Fixation Detection aus (MediaPipe / ptgaze)...")
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=self.scripts_folder,
+                env=env,
+                timeout=300
+            )
+
+            return (True, "OK") if result.returncode == 0 else (False, f"Exit {result.returncode}")
+        except subprocess.TimeoutExpired:
+            return False, "Timeout (300s)"
+        except Exception as e:
+            return False, str(e)
+
     def _run_debug_6(self, config: RunConfiguration, output_dir: Path) -> tuple:
         """Fuehrt debug_6_extended_comparison.py aus."""
         
@@ -1416,5 +1467,5 @@ if __name__ == "__main__":
     print("  - ptgaze-Pipeline (debug_1_ptgaze, offline_calibration_ptgaze, debug_5_ptgaze)")
     print("  - ANALYSIS_MODE Environment-Variable")
     print("  - Erweiterte Cache-Unterstuetzung fuer ptgaze")
-    print("  - 10 Pipeline-Schritte (statt 7)")
+    print("  - 11 Pipeline-Schritte (inkl. Fixation Detection)")
     print("\n" + "="*70)

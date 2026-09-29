@@ -171,7 +171,7 @@ class CacheOverview:
             'offline_calibration', 'offline_calibration_ptgaze',
             'debug_3', 'debug_4',
             'debug_5_mediapipe', 'debug_5_ptgaze',
-            'debug_6'
+            'fixation_detection', 'debug_6'
         ]
         
         for step in all_steps:
@@ -218,6 +218,7 @@ CACHE_CRITERIA = {
     'debug_4': ['video_fps', 'preprocess_mode'],
     'debug_5_mediapipe': ['video_fps', 'calib_mode', 'preprocess_mode'],
     'debug_5_ptgaze': ['video_fps', 'calib_mode', 'preprocess_mode'],
+    'fixation_detection': ['video_fps', 'calib_mode', 'preprocess_mode', 'methods'],
     'debug_6': ['video_fps', 'calib_mode', 'analysis_mode', 'preprocess_mode'],
 }
 
@@ -232,6 +233,7 @@ STEP_OUTPUT_FILES = {
     'debug_4': ['debug_4_pupil_data_synced.csv', 'debug_4_ptgaze_gaze_synced.csv', 'debug_4_sync_info.json'],
     'debug_5_mediapipe': ['debug_5_pupil_data_calibrated.csv'],
     'debug_5_ptgaze': ['debug_5_ptgaze_calibrated.csv'],
+    'fixation_detection': ['debug_6_*_fixations.csv', 'debug_6_*_fixation_metadata.json'],
     'debug_6': ['debug_6_three_way_comparison.csv'],
 }
 
@@ -1082,6 +1084,7 @@ class VPDataManager:
             ('debug_4', 'Synchronisation'),
             ('debug_5_mediapipe', 'MediaPipe Kalibriert'),
             ('debug_5_ptgaze', 'ptgaze Kalibriert'),
+            ('fixation_detection', 'Fixation Detection'),
             ('debug_6', '3-Wege-Vergleich'),
         ]
         
