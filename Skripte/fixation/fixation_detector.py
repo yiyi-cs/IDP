@@ -572,6 +572,25 @@ def detect_fixations(
 
     if config is None:
         config = FixationConfig()
+        
+    # -----------------------------------------------------------------
+    # Normalize trial column
+    # -----------------------------------------------------------------
+
+    if "trial_number" not in df.columns:
+
+        if "trial_assignment" in df.columns:
+
+            df = df.copy()
+            df["trial_number"] = df["trial_assignment"]
+
+        else:
+
+            raise ValueError(
+                "Missing trial information: expected "
+                "'trial_number' or 'trial_assignment'."
+            )
+
 
     required = [
         "timestamp_ms_synced",
