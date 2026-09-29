@@ -1,483 +1,476 @@
-"""
-=================================================================================
-DEBUG 4: SYNCHRONISATION v3.2 (VEREINFACHT MIT phases_detected.json)
-=================================================================================
-NEU in v3.2:
-------------
-- BLINK-MERGE: MediaPipe Blink-Daten werden auf ptgaze uebertragen
-- Grund: MediaPipe EAR-basierte Blink-Detection ist stabiler (besonders bei 25hz)
-- Methode: Nearest-Neighbor (binary) / Linear Interpolation (continuous)
-
-NEU in v3.1:
-------------
-- Package-Struktur (debug/)
-- ptgaze-Synchronisation integriert (gleicher Offset!)
-
-NEU in v3.0:
-------------
-- Nutzt Offset aus phases_detected.json (debug_0)
-- KEINE Audio-Marker-Detektion mehr (bereits gemacht!)
-- KEINE Block-Erkennung mehr (bereits gemacht!)
-- KEINE Offset-Berechnung mehr (bereits gemacht!)
-- ~70% weniger Code
-
-Methode:
---------
-synced_time = video_time + offset  (aus phases_detected.json)
-
-Dann: Trial-Zuordnung aus phases_detected.json
-
-WICHTIG:
---------
-- Modus 1 (Standalone): debug_4 wird UEBERSPRUNGEN
-- Modus 2/3 (Comparison): debug_4 wendet Offset an + ordnet Samples zu
-
-Timeline:
----------
-debug_0 >> debug_1 >> [debug_2] >> debug_3 >> debug_4 >> debug_5 >> debug_6
-          |                                |
-    phases_detected.json       Nutzt Offset aus phases_detected.json
-
-Version: 3.1 (2025-01)
-=================================================================================
-"""
-
-# =================================================================================
-# PATH SETUP (fuer manuelle Ausfuehrung + Package-Import)
-# =================================================================================
-import sys
-from pathlib import Path
-
-# Fuege Projekt-Root zu sys.path hinzu
-_PROJECT_ROOT = Path(__file__).parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-# =================================================================================
-# IMPORTS
-# =================================================================================
-import pandas as pd
-import numpy as np
-import os
-import json
-import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
-
-from config import *
-
-# Environment-Variable-Overrides (für master_cli.py)
-import os
-
-if 'PIPELINE_OUTPUT_BASE_DIR' in os.environ:
-    OUTPUT_BASE_DIR = Path(os.environ['PIPELINE_OUTPUT_BASE_DIR'])
-
-if 'PIPELINE_MAIN_VIDEO_PATH' in os.environ:
-    VIDEO_PATH = Path(os.environ['PIPELINE_MAIN_VIDEO_PATH'])
-
-if 'PIPELINE_EYETRACKER_FILE_PATH' in os.environ:
-    EYETRACKER_FILE_PATH = Path(os.environ['PIPELINE_EYETRACKER_FILE_PATH'])
-
-if 'PIPELINE_CALIBRATION_PKL_PATH' in os.environ:
-    CALIBRATION_PKL_PATH = Path(os.environ['PIPELINE_CALIBRATION_PKL_PATH'])
-
-# ==================== HELPER: JSON SERIALIZATION ====================
-
-def make_json_serializable(obj):
-    """Konvertiert numpy-Typen zu Python-Standard (für json.dump)"""
-    if isinstance(obj, (np.bool_, np.generic)):
-        return obj.item()
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {key: make_json_serializable(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [make_json_serializable(item) for item in obj]
-    else:
-        return obj
-
-# ==================== MAIN ====================
-
-print(f"\n{'='*70}")
-print("DEBUG 4: SYNCHRONISATION v3.0 (VEREINFACHT)")
-print(f"{'='*70}\n")
-
-if ANALYSIS_MODE == 1:
-    print(" MODUS 1: Synchronisation nicht benötigt")
-    print("\nNächster Schritt: debug_5_calibration.py")
-    exit(0)
-
-print(f"Modus: {ANALYSIS_MODE} (Webcam + EyeLink)")
-
-# ==================== SCHRITT 1: PRÜFE phases_detected.json ====================
-
-phases_json_path = Path(OUTPUT_BASE_DIR) / "phases_detected.json"
-
-if not phases_json_path.exists():
-    print(f"\n phases_detected.json nicht gefunden!")
-    print(f"   >> Fallback: Legacy Workflow (debug_4 v2.5)")
-    print(f"   >> EMPFEHLUNG: Laufe debug_0_phase_detection.py zuerst!")
-    print(f"\n   Für optimalen Workflow:")
-    print(f"   1. python debug_0_phase_detection.py")
-    print(f"   2. python debug_1_video_analysis.py")
-    print(f"   3. python debug_3_eyetracker_load.py")
-    print(f"   4. python debug_4_synchronization.py (← du bist hier)")
-    
-    # Hier könnte Legacy-Code stehen (aus v2.5), aber wir forcieren Phase 1
-    print(f"\n Abbruch! Laufe debug_0 zuerst.")
-    exit(1)
-
-print(f" phases_detected.json gefunden!")
-print(f"   Nutze Phase 1 Workflow (KEINE Audio-Detektion)")
-
-# ==================== SCHRITT 2: LADE phases_detected.json ====================
-
-with open(phases_json_path, 'r') as f:
-    phases = json.load(f)
-
-sync_info = phases['sync_info']
-offset_ms = sync_info['offset_ms']
-sync_method = sync_info['method']
-confidence = sync_info.get('confidence', 0.95)
-
-print(f"\n Sync-Info aus debug_0:")
-print(f"   Methode: {sync_method}")
-print(f"   Offset: {offset_ms:.0f} ms")
-print(f"   Confidence: {confidence:.2%}")
-
-# Validierungs-Info (falls Audio gemacht wurde)
-validation = sync_info.get('validation', {})
-if validation:
-    print(f"\n   Audio-Validierung:")
-    print(f"   • Detection-Rate: {validation.get('detection_rate', 0)*100:.1f}%")
-    print(f"   • Mean Deviation: {validation.get('mean_deviation_ms', 0):.1f} ms")
-
-# ==================== SCHRITT 3: LADE PUPILLEN-DATEN ====================
-
-print(f"\n{'='*70}")
-print("LADE PUPILLEN-DATEN")
-print(f"{'='*70}\n")
-
-pupil_csv = os.path.join(OUTPUT_BASE_DIR, "debug_1_pupil_data.csv")
-if not os.path.exists(pupil_csv):
-    print(f" FEHLER: debug_1_video_analysis.py fehlt!")
-    exit(1)
-
-pupil_data = pd.read_csv(pupil_csv)
-print(f"Geladen: {len(pupil_data)} Pupillen-Samples")
-print(f"  Video-Zeit: {pupil_data['timestamp_ms'].min():.0f} - {pupil_data['timestamp_ms'].max():.0f} ms")
-
-# Spalten-Erkennung (Rückwärtskompatibel!)
-if 'avg_pupil_x_px_raw' in pupil_data.columns:
-    x_col, y_col = 'avg_pupil_x_px_raw', 'avg_pupil_y_px_raw'
-    print(f"   CSV-Format: v2.2")
-elif 'avg_pupil_x_px_final' in pupil_data.columns:
-    x_col, y_col = 'avg_pupil_x_px_final', 'avg_pupil_y_px'
-    print(f"   CSV-Format: v2.1 (legacy)")
-else:
-    print(f"\n FEHLER: Keine Pupillenspalten!")
-    exit(1)
-
-# ==================== SCHRITT 3B: LADE PTGAZE-DATEN (NEU v3.1) ====================
-
-print(f"\n{'='*70}")
-print("LADE PTGAZE-DATEN")
-print(f"{'='*70}\n")
-
-ptgaze_csv = os.path.join(OUTPUT_BASE_DIR, "debug_1_ptgaze_data.csv")
-ptgaze_data = None
-ptgaze_available = False
-
-if os.path.exists(ptgaze_csv):
-    ptgaze_data = pd.read_csv(ptgaze_csv)
-    ptgaze_available = True
-    print(f"Geladen: {len(ptgaze_data)} ptgaze-Samples")
-    print(f"  Video-Zeit: {ptgaze_data['timestamp_ms'].min():.0f} - {ptgaze_data['timestamp_ms'].max():.0f} ms")
-    
-    # Spalten-Check
-    required_cols = ['timestamp_ms', 'gaze_pitch_deg', 'gaze_yaw_deg']
-    missing_cols = [col for col in required_cols if col not in ptgaze_data.columns]
-    if missing_cols:
-        print(f"  [WARNUNG] Fehlende Spalten: {missing_cols}")
-        print(f"  >> ptgaze-Sync wird uebersprungen")
-        ptgaze_available = False
-    else:
-        print(f"  Spalten OK: gaze_pitch_deg, gaze_yaw_deg vorhanden")
-else:
-    print(f"[INFO] debug_1_ptgaze_data.csv nicht gefunden")
-    print(f"  >> ptgaze-Sync wird uebersprungen (nur MediaPipe)")
-    print(f"  >> Falls ptgaze gewuenscht: Laufe debug_1_ptgaze.py zuerst")
-
-# ==================== SCHRITT 4: WENDE OFFSET AN (EINE ZEILE!) ====================
-
-pupil_data_synced = pupil_data.copy()
-
-#  NEU v2.2: Prüfe ob Dual-Anchor-Offsets vorhanden
-if sync_method == 'dual_anchor' and 'offset_880hz_ms' in sync_info:
-    # Dual-Anchor: Nutze Trial-spezifischen Offset
-    offset_trials = sync_info['offset_880hz_ms']
-    
-    print(f" Dual-Anchor erkannt!")
-    print(f"   Nutze Trial-Offset: {offset_trials:.0f} ms (880 Hz)")
-    print(f"   (Kalibrierungs-Offset: {sync_info.get('offset_1760hz_ms', 0):.0f} ms)")
-    
-    # Wende Trial-Offset an (besser für Trial-Analyse!)
-    pupil_data_synced['timestamp_ms_synced'] = pupil_data_synced['timestamp_ms'] + offset_trials
-    offset_used = offset_trials
-else:
-    # Standard: Gemischter Offset
-    pupil_data_synced['timestamp_ms_synced'] = pupil_data_synced['timestamp_ms'] + offset_ms
-    offset_used = offset_ms
-    print(f" Single-Offset: {offset_ms:.0f} ms")
-
-pupil_data_synced['sync_method'] = sync_method
-pupil_data_synced['sync_confidence'] = confidence
-
-print(f"  {len(pupil_data_synced)} Samples synchronisiert")
-print(f"  Neue Zeitachse: {pupil_data_synced['timestamp_ms_synced'].min():.0f} - {pupil_data_synced['timestamp_ms_synced'].max():.0f} ms")
-
-# ==================== SCHRITT 4B: WENDE OFFSET AUF PTGAZE AN (NEU v3.1) ====================
-
-ptgaze_data_synced = None
-
-if ptgaze_available and ptgaze_data is not None:
-    print(f"\n{'='*70}")
-    print("SYNCHRONISIERE PTGAZE-DATEN")
-    print(f"{'='*70}\n")
-    
-    ptgaze_data_synced = ptgaze_data.copy()
-    
-    # Wende GLEICHEN Offset an wie fuer MediaPipe!
-    ptgaze_data_synced['timestamp_ms_synced'] = ptgaze_data_synced['timestamp_ms'] + offset_used
-    ptgaze_data_synced['sync_method'] = sync_method
-    ptgaze_data_synced['sync_confidence'] = confidence
-    
-    print(f"  Offset angewendet: {offset_used:.0f} ms (identisch zu MediaPipe)")
-    print(f"  {len(ptgaze_data_synced)} Samples synchronisiert")
-    print(f"  Neue Zeitachse: {ptgaze_data_synced['timestamp_ms_synced'].min():.0f} - {ptgaze_data_synced['timestamp_ms_synced'].max():.0f} ms")
-
-# ==================== SCHRITT 5: TRIAL-ZUORDNUNG AUS phases_detected.json ====================
-
-print(f"\n{'='*70}")
-print("TRIAL-ZUORDNUNG")
-print(f"{'='*70}\n")
-
-# Extrahiere ALLE Trials aus phases_detected.json
-all_trials = []
-
-for block_key in ['experiment_block1', 'experiment_block2']:
-    if block_key in phases['phases']:
-        block_trials = phases['phases'][block_key]['trials']
-        all_trials.extend(block_trials)
-
-print(f"Trials gefunden: {len(all_trials)}")
-
-# Ordne jedem Pupillen-Sample ein Trial und eine Phase zu
-pupil_data_synced['trial_assignment'] = 0
-pupil_data_synced['phase_type'] = 'unassigned'  # NEU: 'fixation', 'stimulus', oder 'unassigned'
-
-for trial in all_trials:
-    trial_num = trial['trial_number']
-    
-    # Zeitgrenzen aus phases_detected.json
-    fix_start = trial['fixation']['start_eyelink_ms']
-    fix_end = trial['fixation']['end_eyelink_ms']
-    stim_start = trial['stimulus']['start_eyelink_ms']
-    stim_end = trial['stimulus']['end_eyelink_ms']
-    
-    # Maske für Fixationsphase (~1-3 Sekunden)
-    mask_fixation = (
-        (pupil_data_synced['timestamp_ms_synced'] >= fix_start) & 
-        (pupil_data_synced['timestamp_ms_synced'] < fix_end)
-    )
-    pupil_data_synced.loc[mask_fixation, 'trial_assignment'] = trial_num
-    pupil_data_synced.loc[mask_fixation, 'phase_type'] = 'fixation'
-    
-    # Maske für Stimulus/Free Exploration (~7 Sekunden)
-    mask_stimulus = (
-        (pupil_data_synced['timestamp_ms_synced'] >= stim_start) & 
-        (pupil_data_synced['timestamp_ms_synced'] < stim_end)
-    )
-    pupil_data_synced.loc[mask_stimulus, 'trial_assignment'] = trial_num
-    pupil_data_synced.loc[mask_stimulus, 'phase_type'] = 'stimulus'
-
-# Statistik
-n_assigned = (pupil_data_synced['trial_assignment'] > 0).sum()
-n_fixation = (pupil_data_synced['phase_type'] == 'fixation').sum()
-n_stimulus = (pupil_data_synced['phase_type'] == 'stimulus').sum()
-n_unassigned = (pupil_data_synced['phase_type'] == 'unassigned').sum()
-
-print(f"\nTrial-Zuordnung (MediaPipe):")
-print(f"  Zugeordnet: {n_assigned}/{len(pupil_data_synced)} Samples ({n_assigned/len(pupil_data_synced)*100:.1f}%)")
-print(f"\n  Phasen-Statistik:")
-print(f"    Fixation:   {n_fixation:>6} Samples ({n_fixation/len(pupil_data_synced)*100:>5.1f}%)")
-print(f"    Stimulus:   {n_stimulus:>6} Samples ({n_stimulus/len(pupil_data_synced)*100:>5.1f}%)")
-print(f"    Unassigned: {n_unassigned:>6} Samples ({n_unassigned/len(pupil_data_synced)*100:>5.1f}%)")
-
-# TRIAL-ZUORDNUNG FUER PTGAZE (NEU v3.1)
-
-n_assigned_ptgaze = 0
-
-if ptgaze_available and ptgaze_data_synced is not None:
-    print(f"\nTrial-Zuordnung (ptgaze):")
-    
-    # Initialisiere trial_assignment und phase_type
-    ptgaze_data_synced['trial_assignment'] = 0
-    ptgaze_data_synced['phase_type'] = 'unassigned'  
-    
-    for trial in all_trials:
-        trial_num = trial['trial_number']
-        
-        # Zeitgrenzen aus phases_detected.json
-        fix_start = trial['fixation']['start_eyelink_ms']
-        fix_end = trial['fixation']['end_eyelink_ms']
-        stim_start = trial['stimulus']['start_eyelink_ms']
-        stim_end = trial['stimulus']['end_eyelink_ms']
-        
-        # Maske für Fixationsphase
-        mask_fixation = (
-            (ptgaze_data_synced['timestamp_ms_synced'] >= fix_start) & 
-            (ptgaze_data_synced['timestamp_ms_synced'] < fix_end)
-        )
-        ptgaze_data_synced.loc[mask_fixation, 'trial_assignment'] = trial_num
-        ptgaze_data_synced.loc[mask_fixation, 'phase_type'] = 'fixation'
-        
-        # Maske für Stimulus/Free Exploration
-        mask_stimulus = (
-            (ptgaze_data_synced['timestamp_ms_synced'] >= stim_start) & 
-            (ptgaze_data_synced['timestamp_ms_synced'] < stim_end)
-        )
-        ptgaze_data_synced.loc[mask_stimulus, 'trial_assignment'] = trial_num
-        ptgaze_data_synced.loc[mask_stimulus, 'phase_type'] = 'stimulus'
-    
-    n_assigned_ptgaze = (ptgaze_data_synced['trial_assignment'] > 0).sum()
-    n_fixation_ptgaze = (ptgaze_data_synced['phase_type'] == 'fixation').sum()
-    n_stimulus_ptgaze = (ptgaze_data_synced['phase_type'] == 'stimulus').sum()
-    n_unassigned_ptgaze = (ptgaze_data_synced['phase_type'] == 'unassigned').sum()
-    
-    print(f"  Zugeordnet: {n_assigned_ptgaze}/{len(ptgaze_data_synced)} Samples ({n_assigned_ptgaze/len(ptgaze_data_synced)*100:.1f}%)")
-    print(f"\n  Phasen-Statistik (ptgaze):")
-    print(f"    Fixation:   {n_fixation_ptgaze:>6} Samples ({n_fixation_ptgaze/len(ptgaze_data_synced)*100:>5.1f}%)")
-    print(f"    Stimulus:   {n_stimulus_ptgaze:>6} Samples ({n_stimulus_ptgaze/len(ptgaze_data_synced)*100:>5.1f}%)")
-    print(f"    Unassigned: {n_unassigned_ptgaze:>6} Samples ({n_unassigned_ptgaze/len(ptgaze_data_synced)*100:>5.1f}%)")
-
     # ══════════════════════════════════════════════════════════════════════
-    # BLINK-MERGE: MediaPipe -> ptgaze (NEU v3.2)
+    # QUALITY / BLINK MERGE: MediaPipe -> ptgaze (v3.3)
     # ══════════════════════════════════════════════════════════════════════
-    # Problem: ptgaze Blink-Detection ist bei 25hz Videos instabil
-    # Loesung: Uebernehme Blink-Daten von MediaPipe (stabilere EAR-Werte)
-    
-    print(f"\n  [BLINK-MERGE] Uebertrage MediaPipe Blink-Daten auf ptgaze...")
-    
-    # Definiere Blink-Spalten
-    blink_cols_binary = ['is_blink', 'eyes_closed']  # Boolean -> Nearest-Neighbor
-    blink_cols_continuous = ['left_ear', 'right_ear', 'avg_ear']  # Float -> Linear Interpolation
-    blink_cols_counter = ['blink_count']  # Int -> Forward-Fill
-    
-    all_blink_cols = blink_cols_binary + blink_cols_continuous + blink_cols_counter
-    
-    # Pruefe welche Spalten in MediaPipe vorhanden sind
-    available_blink_cols = [col for col in all_blink_cols if col in pupil_data_synced.columns]
-    missing_blink_cols = [col for col in all_blink_cols if col not in pupil_data_synced.columns]
-    
-    if not available_blink_cols:
-        print(f"    [!] Keine Blink-Spalten in MediaPipe-Daten gefunden")
-        print(f"        Blink-Merge uebersprungen")
+    #
+    # MediaPipe is the source of truth for eye-state / blink quality.
+    #
+    # In addition to the legacy blink fields, propagate:
+    #
+    #   valid_eye_frame
+    #   invalid_reason
+    #
+    # These fields are required by downstream fixation detection.
+    #
+    # IMPORTANT:
+    #   - timestamp_ms_synced is NOT modified here.
+    #   - PTGaze keeps its own synchronized timestamps.
+    #   - MediaPipe quality information is mapped to the temporally
+    #     nearest PTGaze sample.
+    # ══════════════════════════════════════════════════════════════════════
+
+    print(
+        "\n  [QUALITY-MERGE] "
+        "Uebertrage MediaPipe Blink-/Quality-Daten auf ptgaze..."
+    )
+
+    # ------------------------------------------------------------------
+    # Column groups
+    # ------------------------------------------------------------------
+
+    # Boolean / binary:
+    # nearest-neighbour mapping
+    blink_cols_binary = [
+        "is_blink",
+        "eyes_closed",
+        "valid_eye_frame",
+    ]
+
+    # Continuous:
+    # linear interpolation
+    blink_cols_continuous = [
+        "left_ear",
+        "right_ear",
+        "avg_ear",
+    ]
+
+    # Counter:
+    # previous MediaPipe sample / forward-fill semantics
+    blink_cols_counter = [
+        "blink_count",
+    ]
+
+    # Categorical:
+    # nearest-neighbour mapping
+    quality_cols_categorical = [
+        "invalid_reason",
+    ]
+
+    all_quality_cols = (
+        blink_cols_binary
+        + blink_cols_continuous
+        + blink_cols_counter
+        + quality_cols_categorical
+    )
+
+    available_quality_cols = [
+        col
+        for col in all_quality_cols
+        if col in pupil_data_synced.columns
+    ]
+
+    missing_quality_cols = [
+        col
+        for col in all_quality_cols
+        if col not in pupil_data_synced.columns
+    ]
+
+    if not available_quality_cols:
+
+        print(
+            "    [!] Keine Blink-/Quality-Spalten "
+            "in MediaPipe-Daten gefunden"
+        )
+
+        print(
+            "        Quality-Merge wird uebersprungen"
+        )
+
     else:
-        print(f"    Verfuegbare Spalten: {', '.join(available_blink_cols)}")
-        if missing_blink_cols:
-            print(f"    Fehlende Spalten: {', '.join(missing_blink_cols)}")
-        
-        # Sortiere beide DataFrames nach Zeit (wichtig fuer Interpolation!)
-        pupil_sorted = pupil_data_synced.sort_values('timestamp_ms_synced').reset_index(drop=True)
-        ptgaze_sorted = ptgaze_data_synced.sort_values('timestamp_ms_synced').reset_index(drop=True)
-        
-        # MediaPipe Timestamps und ptgaze Timestamps
-        mp_times = pupil_sorted['timestamp_ms_synced'].values
-        pt_times = ptgaze_sorted['timestamp_ms_synced'].values
-        
+
+        print(
+            "    Verfuegbare Spalten: "
+            + ", ".join(
+                available_quality_cols
+            )
+        )
+
+        if missing_quality_cols:
+
+            print(
+                "    Fehlende Spalten: "
+                + ", ".join(
+                    missing_quality_cols
+                )
+            )
+
+        # ==============================================================
+        # Sort both signals by the EXISTING synchronized timestamp
+        # ==============================================================
+
+        pupil_sorted = (
+            pupil_data_synced
+            .sort_values(
+                "timestamp_ms_synced"
+            )
+            .reset_index(drop=True)
+        )
+
+        ptgaze_sorted = (
+            ptgaze_data_synced
+            .sort_values(
+                "timestamp_ms_synced"
+            )
+            .reset_index(drop=True)
+        )
+
+        mp_times = (
+            pupil_sorted[
+                "timestamp_ms_synced"
+            ]
+            .to_numpy()
+        )
+
+        pt_times = (
+            ptgaze_sorted[
+                "timestamp_ms_synced"
+            ]
+            .to_numpy()
+        )
+
+        # ==============================================================
+        # Common nearest-neighbour mapping
+        #
+        # Calculate ONCE and reuse for:
+        #   - binary fields
+        #   - categorical fields
+        # ==============================================================
+
+        indices = np.searchsorted(
+            mp_times,
+            pt_times,
+        )
+
+        indices = np.clip(
+            indices,
+            0,
+            len(mp_times) - 1,
+        )
+
+        left_indices = np.clip(
+            indices - 1,
+            0,
+            len(mp_times) - 1,
+        )
+
+        right_indices = indices
+
+        left_dist = np.abs(
+            pt_times
+            - mp_times[left_indices]
+        )
+
+        right_dist = np.abs(
+            pt_times
+            - mp_times[right_indices]
+        )
+
+        nearest_indices = np.where(
+            left_dist <= right_dist,
+            left_indices,
+            right_indices,
+        )
+
+        nearest_time_diff = np.minimum(
+            left_dist,
+            right_dist,
+        )
+
         n_merged = 0
-        
-        # Binary Spalten (is_blink, eyes_closed) -> Nearest-Neighbor
+
+        # ==============================================================
+        # 1. Binary / boolean fields
+        # ==============================================================
+
         for col in blink_cols_binary:
-            if col in pupil_sorted.columns:
-                mp_values = pupil_sorted[col].values
-                
-                # Nearest-Neighbor Interpolation
-                # Finde fuer jeden ptgaze-Timestamp den naechsten MediaPipe-Timestamp
-                indices = np.searchsorted(mp_times, pt_times)
-                indices = np.clip(indices, 0, len(mp_times) - 1)
-                
-                # Pruefe ob linker oder rechter Nachbar naeher ist
-                left_indices = np.clip(indices - 1, 0, len(mp_times) - 1)
-                right_indices = indices
-                
-                left_dist = np.abs(pt_times - mp_times[left_indices])
-                right_dist = np.abs(pt_times - mp_times[right_indices])
-                
-                nearest_indices = np.where(left_dist <= right_dist, left_indices, right_indices)
-                
-                # Uebertrage Werte
-                ptgaze_sorted[col] = mp_values[nearest_indices]
-                n_merged += 1
-        
-        # Continuous Spalten (EAR-Werte) -> Lineare Interpolation
+
+            if col not in pupil_sorted.columns:
+                continue
+
+            mp_values = (
+                pupil_sorted[col]
+                .to_numpy()
+            )
+
+            ptgaze_sorted[col] = (
+                mp_values[
+                    nearest_indices
+                ]
+            )
+
+            n_merged += 1
+
+        # ==============================================================
+        # 2. Categorical fields
+        # ==============================================================
+
+        for col in quality_cols_categorical:
+
+            if col not in pupil_sorted.columns:
+                continue
+
+            mp_values = (
+                pupil_sorted[col]
+                .to_numpy()
+            )
+
+            ptgaze_sorted[col] = (
+                mp_values[
+                    nearest_indices
+                ]
+            )
+
+            n_merged += 1
+
+        # ==============================================================
+        # 3. Continuous EAR fields
+        #
+        # Keep existing behaviour:
+        # linear interpolation on timestamp_ms_synced.
+        # ==============================================================
+
         for col in blink_cols_continuous:
-            if col in pupil_sorted.columns:
-                mp_values = pupil_sorted[col].values
-                
-                # Behandle NaN-Werte in MediaPipe-Daten
-                valid_mask = ~np.isnan(mp_values)
-                
-                if valid_mask.sum() > 1:
-                    # Lineare Interpolation nur mit validen Werten
-                    ptgaze_sorted[col] = np.interp(
-                        pt_times,
-                        mp_times[valid_mask],
-                        mp_values[valid_mask]
-                    )
-                    n_merged += 1
-                else:
-                    ptgaze_sorted[col] = np.nan
-        
-        # Counter Spalten (blink_count) -> Forward-Fill von naechstem Zeitpunkt
+
+            if col not in pupil_sorted.columns:
+                continue
+
+            mp_values = (
+                pd.to_numeric(
+                    pupil_sorted[col],
+                    errors="coerce",
+                )
+                .to_numpy(
+                    dtype=float
+                )
+            )
+
+            valid_mask = (
+                ~np.isnan(
+                    mp_values
+                )
+            )
+
+            if valid_mask.sum() > 1:
+
+                ptgaze_sorted[col] = np.interp(
+                    pt_times,
+                    mp_times[
+                        valid_mask
+                    ],
+                    mp_values[
+                        valid_mask
+                    ],
+                )
+
+            else:
+
+                ptgaze_sorted[col] = np.nan
+
+            n_merged += 1
+
+        # ==============================================================
+        # 4. Blink counter
+        #
+        # Use last MediaPipe sample that is not in the future.
+        # ==============================================================
+
         for col in blink_cols_counter:
-            if col in pupil_sorted.columns:
-                mp_values = pupil_sorted[col].values
-                
-                # Finde naechsten (nicht zukuenftigen) MediaPipe-Timestamp
-                indices = np.searchsorted(mp_times, pt_times, side='right') - 1
-                indices = np.clip(indices, 0, len(mp_times) - 1)
-                
-                ptgaze_sorted[col] = mp_values[indices]
-                n_merged += 1
-        
-        # Markiere Quelle der Blink-Daten
-        ptgaze_sorted['blink_source'] = 'mediapipe'
-        
-        # Berechne maximale Zeitdifferenz (fuer QS)
-        indices = np.searchsorted(mp_times, pt_times)
-        indices = np.clip(indices, 0, len(mp_times) - 1)
-        left_indices = np.clip(indices - 1, 0, len(mp_times) - 1)
-        
-        time_diffs = np.minimum(
-            np.abs(pt_times - mp_times[indices]),
-            np.abs(pt_times - mp_times[left_indices])
+
+            if col not in pupil_sorted.columns:
+                continue
+
+            mp_values = (
+                pupil_sorted[col]
+                .to_numpy()
+            )
+
+            previous_indices = (
+                np.searchsorted(
+                    mp_times,
+                    pt_times,
+                    side="right",
+                )
+                - 1
+            )
+
+            previous_indices = np.clip(
+                previous_indices,
+                0,
+                len(mp_times) - 1,
+            )
+
+            ptgaze_sorted[col] = (
+                mp_values[
+                    previous_indices
+                ]
+            )
+
+            n_merged += 1
+
+        # ==============================================================
+        # Metadata
+        # ==============================================================
+
+        ptgaze_sorted[
+            "blink_source"
+        ] = "mediapipe"
+
+        ptgaze_sorted[
+            "eye_quality_source"
+        ] = "mediapipe"
+
+        ptgaze_sorted[
+            "quality_merge_time_diff_ms"
+        ] = nearest_time_diff
+
+        # ==============================================================
+        # IMPORTANT:
+        #
+        # PTGaze timestamp_ms_synced is intentionally NOT overwritten.
+        # ==============================================================
+
+        ptgaze_data_synced = (
+            ptgaze_sorted
         )
-        max_time_diff = np.max(time_diffs)
-        mean_time_diff = np.mean(time_diffs)
-        
-        # Aktualisiere ptgaze_data_synced
-        ptgaze_data_synced = ptgaze_sorted
-        
-        print(f"    [OK] {n_merged} Blink-Spalten uebertragen")
-        print(f"    Zeitliche Genauigkeit:")
-        print(f"      - Mittlere Abweichung: {mean_time_diff:.1f} ms")
-        print(f"      - Maximale Abweichung: {max_time_diff:.1f} ms")
-        
-        # Warnung bei grosser Zeitdifferenz
-        if max_time_diff > 100:  # > 100ms
-            print(f"    [!] WARNUNG: Grosse Zeitdifferenz bei Blink-Merge!")
-            print(f"        Moeglicherweise unterschiedliche Frameraten")
+
+        # ==============================================================
+        # Diagnostics
+        # ==============================================================
+
+        max_time_diff = float(
+            np.max(
+                nearest_time_diff
+            )
+        )
+
+        mean_time_diff = float(
+            np.mean(
+                nearest_time_diff
+            )
+        )
+
+        print(
+            f"    [OK] {n_merged} "
+            f"Blink-/Quality-Spalten uebertragen"
+        )
+
+        print(
+            "    Zeitliche Genauigkeit:"
+        )
+
+        print(
+            f"      - Mittlere Abweichung: "
+            f"{mean_time_diff:.1f} ms"
+        )
+
+        print(
+            f"      - Maximale Abweichung: "
+            f"{max_time_diff:.1f} ms"
+        )
+
+        # --------------------------------------------------------------
+        # Quality diagnostics
+        # --------------------------------------------------------------
+
+        if (
+            "valid_eye_frame"
+            in ptgaze_sorted.columns
+        ):
+
+            valid_count = (
+                ptgaze_sorted[
+                    "valid_eye_frame"
+                ]
+                .fillna(False)
+                .astype(bool)
+                .sum()
+            )
+
+            invalid_count = (
+                len(ptgaze_sorted)
+                - valid_count
+            )
+
+            print(
+                "    Eye-frame quality:"
+            )
+
+            print(
+                f"      - Valid: "
+                f"{valid_count}/{len(ptgaze_sorted)} "
+                f"({100 * valid_count / len(ptgaze_sorted):.1f}%)"
+            )
+
+            print(
+                f"      - Invalid: "
+                f"{invalid_count}"
+            )
+
+        if (
+            "invalid_reason"
+            in ptgaze_sorted.columns
+        ):
+
+            invalid_reasons = (
+                ptgaze_sorted.loc[
+                    ~ptgaze_sorted[
+                        "valid_eye_frame"
+                    ]
+                    .fillna(False)
+                    .astype(bool),
+                    "invalid_reason",
+                ]
+                .value_counts(
+                    dropna=False
+                )
+            )
+
+            if len(
+                invalid_reasons
+            ):
+
+                print(
+                    "    Invalid reasons:"
+                )
+
+                for (
+                    reason,
+                    count
+                ) in (
+                    invalid_reasons.items()
+                ):
+
+                    print(
+                        f"      - "
+                        f"{reason}: {count}"
+                    )
+
+        # --------------------------------------------------------------
+        # Timing warning
+        # --------------------------------------------------------------
+
+        if max_time_diff > 100:
+
+            print(
+                "    [!] WARNUNG: "
+                "Grosse Zeitdifferenz "
+                "bei Quality-Merge!"
+            )
+
+            print(
+                "        Moeglicherweise "
+                "unterschiedliche Frameraten "
+                "oder fehlende Samples"
+            )
 
 # Verteilung
 for block_key in ['experiment_block1', 'experiment_block2']:
