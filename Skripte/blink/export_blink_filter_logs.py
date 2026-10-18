@@ -53,7 +53,7 @@ SKRIPTE_DIR = Path(__file__).resolve().parents[1]
 if str(SKRIPTE_DIR) not in sys.path:
     sys.path.insert(0, str(SKRIPTE_DIR))
 from shared.shared_pupil_detection import RobustPupilDetector
-from shared.shared_image_preprocessing import preprocess_frame
+from shared.shared_image_preprocessing import preprocess_frame, validate_preprocess_mode
 
 # =============================================================================
 # USER RUN SETTINGS
@@ -619,6 +619,7 @@ def export_blink_filter_logs(
     max_frames:
         Optional number of exported frames for quick testing.
     """
+    validate_preprocess_mode(preprocess_mode)
     validate_arguments(
         process_start_ms=process_start_ms,
         process_end_ms=process_end_ms,
@@ -901,7 +902,7 @@ def main():
     parser.add_argument('--video', type=Path, required=True)
     parser.add_argument('--run-dir', type=Path, required=True)
     parser.add_argument('--vp', required=True)
-    parser.add_argument('--preprocess-mode', choices=['none', 'lanczos_2x'], default='none')
+    parser.add_argument('--preprocess-mode', choices=['none'], default='none')
     args = parser.parse_args()
     export_blink_filter_logs(str(args.video), str(args.run_dir / 'extra'),
         ap_code=args.vp, run_name=args.run_dir.name, preprocess_mode=args.preprocess_mode)

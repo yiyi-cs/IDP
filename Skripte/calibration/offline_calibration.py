@@ -68,7 +68,7 @@ except ImportError:
 
 # Shared Detection (v1.3)
 from shared.shared_pupil_detection import RobustPupilDetector
-from shared.shared_image_preprocessing import preprocess_frame
+from shared.shared_image_preprocessing import preprocess_frame, validate_preprocess_mode
 
 # Config
 from config import (
@@ -98,7 +98,7 @@ if 'PIPELINE_EYETRACKER_FILE_PATH' in os.environ:
 if 'PIPELINE_CALIBRATION_PKL_PATH' in os.environ:
     CALIBRATION_PKL_PATH = Path(os.environ['PIPELINE_CALIBRATION_PKL_PATH'])
 
-PREPROCESS_MODE = os.environ.get('PIPELINE_PREPROCESS_MODE', 'none')
+PREPROCESS_MODE = validate_preprocess_mode(os.environ.get('PIPELINE_PREPROCESS_MODE', 'none'))
 # ══════════════════════════════════════════════════════════════════════
 # KALIBRIERUNGSMODUS (NEU v3.3)
 # ══════════════════════════════════════════════════════════════════════
@@ -1575,4 +1575,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n\n Abgebrochen durch Nutzer")
+
 

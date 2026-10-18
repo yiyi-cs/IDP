@@ -55,7 +55,7 @@ from config import *
 from shared.shared_gaze_detection_ptgaze import PtgazeGazeDetector
 from omegaconf import OmegaConf
 from ptgaze.common import Visualizer
-from shared.shared_image_preprocessing import preprocess_frame
+from shared.shared_image_preprocessing import preprocess_frame, validate_preprocess_mode
 
 # Environment-Variable-Overrides (fuer master_cli.py)
 if 'PIPELINE_OUTPUT_BASE_DIR' in os.environ:
@@ -64,7 +64,7 @@ if 'PIPELINE_OUTPUT_BASE_DIR' in os.environ:
 if 'PIPELINE_MAIN_VIDEO_PATH' in os.environ:
     VIDEO_PATH = Path(os.environ['PIPELINE_MAIN_VIDEO_PATH'])
     
-PREPROCESS_MODE = os.environ.get('PIPELINE_PREPROCESS_MODE', 'none')
+PREPROCESS_MODE = validate_preprocess_mode(os.environ.get('PIPELINE_PREPROCESS_MODE', 'none'))
 
 # ==================== BAD SAMPLE DETECTION ====================
 
@@ -292,9 +292,6 @@ class PtgazeGazeAnalyzer:
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if PREPROCESS_MODE == "lanczos_2x":
-            width *= 2
-            height *= 2
         self.fps = fps
         
         print(f"   Video: {width}x{height} @ {fps:.1f} FPS")
@@ -375,9 +372,6 @@ class PtgazeGazeAnalyzer:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if PREPROCESS_MODE == "lanczos_2x":
-            width *= 2
-            height *= 2
         self.fps = fps
         
         print(f"Video: {Path(video_path).name}")
@@ -771,10 +765,6 @@ if __name__ == "__main__":
         video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
 
-        if PREPROCESS_MODE == "lanczos_2x":
-            video_width *= 2
-            video_height *= 2
-            
         analyzer = PtgazeGazeAnalyzer(
             video_width=video_width,
             video_height=video_height
@@ -797,10 +787,6 @@ if __name__ == "__main__":
         video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
 
-        if PREPROCESS_MODE == "lanczos_2x":
-            video_width *= 2
-            video_height *= 2            
-        
         analyzer = PtgazeGazeAnalyzer(
             video_width=video_width,
             video_height=video_height
@@ -839,3 +825,4 @@ if __name__ == "__main__":
             print(f"\nNaechster Schritt: debug_2_audio_detection.py (falls noetig)")
         
         analyzer.close()
+

@@ -644,7 +644,8 @@ class VPDataManager:
                 video_fps=data.get('video_fps', ''),
                 calib_mode=data.get('calib_mode', ''),
                 analysis_mode=data.get('analysis_mode', 2),
-                methods=data.get('methods', 'both')
+                methods=data.get('methods', 'both'),
+                preprocess_mode=data.get('preprocess_mode', 'unknown')
             )
         except (json.JSONDecodeError, KeyError):
             return None
@@ -1167,3 +1168,4 @@ if __name__ == "__main__":
     print(f"\n{'='*70}")
     print("TEST ABGESCHLOSSEN")
     print(f"{'='*70}")
+

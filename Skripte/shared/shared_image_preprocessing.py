@@ -1,39 +1,17 @@
-import cv2
+"""Production input contract: preserve original frame size and pixel values."""
+
+SUPPORTED_PREPROCESS_MODES = {"none"}
 
 
-SUPPORTED_PREPROCESS_MODES = {
-    "none",
-    "lanczos_2x",
-}
+def validate_preprocess_mode(mode="none"):
+    if mode != "none":
+        raise ValueError(
+            f"Image preprocessing {mode!r} is disabled. "
+            "The production pipeline requires original frames (mode='none')."
+        )
+    return mode
 
 
 def preprocess_frame(frame, mode="none"):
-    """
-    Apply image preprocessing before MediaPipe / PTGaze inference.
-
-    Parameters
-    ----------
-    frame : np.ndarray
-        Input frame in BGR format.
-    mode : str
-        Preprocessing mode.
-
-    Returns
-    -------
-    np.ndarray
-        Preprocessed frame.
-    """
-    if mode not in SUPPORTED_PREPROCESS_MODES:
-        raise ValueError(f"Unsupported preprocess mode: {mode}")
-
-    if mode == "none":
-        return frame
-
-    if mode == "lanczos_2x":
-        return cv2.resize(
-            frame,
-            None,
-            fx=2.0,
-            fy=2.0,
-            interpolation=cv2.INTER_LANCZOS4,
-        )
+    validate_preprocess_mode(mode)
+    return frame

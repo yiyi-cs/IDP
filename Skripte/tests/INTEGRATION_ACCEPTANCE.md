@@ -75,7 +75,7 @@ python -m blink.run_pipeline_extras \
   --vp bjs4 --methods both --preprocess-mode none
 ```
 
-Use the same preprocessing mode as calibration (`none` or `lanczos_2x`).
+Only `none` is supported. Image-derived caches must explicitly record `preprocess_mode: none`.
 Verify 100% frame-mask coverage, sensible independent thresholds, no shifted
 blink shading, the third/fourth timeline rows using saved events, every expected
 file in `extra/`, and successful Step 11. Inspect real eye ROIs separately.

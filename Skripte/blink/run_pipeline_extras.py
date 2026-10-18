@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from blink.run_data import load_validated_gaze
+from shared.shared_image_preprocessing import validate_preprocess_mode
 
 EXPECTED_OUTPUTS = (
     'blink_filter_frame_log.csv', 'blink_filter_regions.csv',
@@ -25,6 +26,7 @@ EXPECTED_OUTPUTS = (
 
 
 def run_stage(run_dir, video, asc, vp, methods='both', preprocess_mode='none'):
+    validate_preprocess_mode(preprocess_mode)
     run, video, asc = (Path(p).resolve() for p in (run_dir, video, asc))
     if methods not in ('both', 'mediapipe', 'ptgaze'):
         raise ValueError(f'Unknown gaze methods: {methods}')
@@ -81,7 +83,7 @@ def main():
     parser.add_argument('--asc', type=Path, required=True)
     parser.add_argument('--vp', required=True)
     parser.add_argument('--methods', choices=['both', 'mediapipe', 'ptgaze'], default='both')
-    parser.add_argument('--preprocess-mode', choices=['none', 'lanczos_2x'], default='none')
+    parser.add_argument('--preprocess-mode', choices=['none'], default='none')
     args = parser.parse_args()
     run_stage(args.run_dir, args.video, args.asc, args.vp, args.methods, args.preprocess_mode)
 

@@ -74,10 +74,8 @@ FIRST_TRIAL_IS_PRACTICE = True      # Trial 1 ist Uebungslauf (wird Trial 0)
 
 # ==================== IMAGE PREPROCESSING ====================
 
-PREPROCESS_MODE = "lanczos_2x"
-# Supported:
-# - "none"
-# - "lanczos_2x"
+PREPROCESS_MODE = "none"
+# Production pipeline uses original frames only; no image resizing.
 
 
 # ---------------------------------------------------------------------------------
@@ -769,3 +767,4 @@ def validate_config():
 print(f"[OK] Config geladen (v4.0)")
 print(f"     Modus: {ANALYSIS_MODE}")
 print(f"     Output: {OUTPUT_BASE_DIR}")
+

@@ -39,6 +39,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 # =================================================================================
 # IMPORTS
 # =================================================================================
+from shared.shared_image_preprocessing import validate_preprocess_mode
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple
 import subprocess
@@ -80,6 +81,9 @@ class RunConfiguration:
     # Cache-Entscheidungen (NEU v2.1)
     cache_decisions: Optional['CacheDecisions'] = None
     
+    def __post_init__(self):
+        validate_preprocess_mode(self.preprocess_mode)
+
     def __str__(self):
         calib_info = "Auto-Create" if self.create_calibration else f"Custom"
         return f"{self.vp_code} | {self.video_fps} | Mode {self.analysis_mode} | {self.calib_mode} | Methods: {self.methods}"
@@ -355,6 +359,14 @@ class CrossRunCacheScanner:
         except (OSError, ValueError):
             pass  # Falls resolve() fehlschlaegt, weitermachen
         
+        if 'preprocess_mode' in CACHE_CRITERIA.get(step, []):
+            source_config = self._get_run_config(source_run) or {}
+            target_config = self._get_run_config(target_run) or {}
+            if (source_config.get('preprocess_mode') != 'none'
+                    or target_config.get('preprocess_mode') != 'none'):
+                print(f"      [CACHE REJECTED] {step}: raw-frame provenance required")
+                return False
+
         filenames = self.output_mapping[step]
         copied_count = 0
         skipped_count = 0
@@ -1026,7 +1038,7 @@ class AnalysisPipeline:
         env['PIPELINE_ANALYSIS_MODE'] = str(config.analysis_mode)
         env['PIPELINE_CALIB_MODE'] = config.calib_mode  # NEU v2.2
         env['PIPELINE_METHODS'] = config.methods  # NEU v2.2
-        env['PIPELINE_PREPROCESS_MODE'] = config.preprocess_mode
+        env['PIPELINE_PREPROCESS_MODE'] = validate_preprocess_mode(config.preprocess_mode)
         return env
     
     def _run_debug_0(self, config: RunConfiguration, output_dir: Path) -> tuple:
