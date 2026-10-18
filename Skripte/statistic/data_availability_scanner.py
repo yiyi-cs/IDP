@@ -692,3 +692,4 @@ if __name__ == "__main__":
     else:
         print(f"\n[!] Test-Ordner nicht gefunden: {test_folder}")
         print("    Bitte Pfad anpassen oder Scanner manuell verwenden.")
+

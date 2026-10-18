@@ -549,3 +549,4 @@ if __name__ == "__main__":
         run_statistical_cli(base_folder, scripts_folder)
     else:
         print(f"\n[!] Test-Ordner nicht gefunden: {base_folder}")
+

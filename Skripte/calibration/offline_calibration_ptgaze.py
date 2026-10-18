@@ -53,6 +53,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import Ridge
 
+from shared.frame_timing import load_frame_clock, exact_frame_window
 from shared.shared_image_preprocessing import preprocess_frame, validate_preprocess_mode
 
 # ptgaze imports
@@ -464,10 +465,10 @@ class OfflinePtgazeCalibration:
         start_time = timestamp + window_start
         end_time = timestamp + window_end
         
-        start_frame = int(start_time * fps)
-        end_frame = int(end_time * fps)
+        frame_clock = load_frame_clock(video_path, OUTPUT_BASE_DIR)
+        start_frame, end_frame = frame_clock.bounds(start_time, end_time)
         
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
         
         gaze_pitches = []
         gaze_yaws = []
@@ -476,10 +477,9 @@ class OfflinePtgazeCalibration:
         head_rolls = []
         head_confidences = []
         
-        for frame_num in range(start_frame, end_frame):
-            ret, frame = cap.read()
-            if not ret:
-                break
+        for frame_num, frame in exact_frame_window(
+                video_path, frame_clock, start_frame, end_frame,
+                int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))):
             
             frame = preprocess_frame(frame, PREPROCESS_MODE)
 

@@ -13,6 +13,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from shared.frame_timing import TIMEBASE_VERSION, detector_input
 from blink.run_data import load_validated_gaze
 from shared.shared_image_preprocessing import validate_preprocess_mode
 
@@ -28,6 +29,8 @@ EXPECTED_OUTPUTS = (
 def run_stage(run_dir, video, asc, vp, methods='both', preprocess_mode='none'):
     validate_preprocess_mode(preprocess_mode)
     run, video, asc = (Path(p).resolve() for p in (run_dir, video, asc))
+    if (run / 'config_used.json').exists() and json.loads((run / 'config_used.json').read_text()).get('diagnostic_only'):
+        raise ValueError('Temporal-only diagnostic copies cannot be used as production Runs')
     if methods not in ('both', 'mediapipe', 'ptgaze'):
         raise ValueError(f'Unknown gaze methods: {methods}')
     for p in [run / 'phases_detected.json', run / 'debug_3_eyetracker_data.csv',
@@ -48,6 +51,9 @@ def run_stage(run_dir, video, asc, vp, methods='both', preprocess_mode='none'):
         required = {'frame', 'timestamp_ms_synced', 'phase_type', 'gaze_deg_x_calib'}
         if not required.issubset(columns):
             raise ValueError(f'{method}: missing calibrated synchronized columns: {required-set(columns)}')
+        source = pd.read_csv(run / filenames[method], usecols=['timestamp_source']) if 'timestamp_source' in columns else None
+        if source is None or not source['timestamp_source'].eq(TIMEBASE_VERSION).all():
+            raise ValueError(f'{method}: old frame/FPS timebase; regenerate or use diagnostic repair')
         if not {'trial_number', 'trial_assignment'}.intersection(columns):
             raise ValueError(f'{method}: missing trial assignment')
     from blink.export_blink_filter_logs import export_blink_filter_logs
@@ -63,7 +69,7 @@ def run_stage(run_dir, video, asc, vp, methods='both', preprocess_mode='none'):
                     'fixation' / 'run_fixation_detection.py')], env=env, check=True)
     preferred = 'ptgaze' if 'ptgaze' in selected else 'mediapipe'
     from fixation.eyelink_sanity import run_sanity
-    run_sanity(run, validated[preferred], preferred)
+    run_sanity(run, detector_input(validated[preferred], pd.read_csv(extra / 'blink_filter_frame_log.csv'), run), preferred)
     from blink.generate_blink_diagnostics import render_run as render_blink
     from fixation.generate_fixation_timeline_pdf import render_run as render_fixation
     render_blink(run, video, vp, preferred)
@@ -72,7 +78,7 @@ def run_stage(run_dir, video, asc, vp, methods='both', preprocess_mode='none'):
         if not (extra / name).is_file() or (extra / name).stat().st_size == 0:
             raise RuntimeError(f'Missing or empty integration output: {name}')
     marker.write_text(json.dumps(dict(run_dir=str(run), video=str(video), asc=str(asc),
-        methods=methods, preprocess_mode=preprocess_mode, outputs=EXPECTED_OUTPUTS), indent=2))
+        methods=methods, preprocess_mode=preprocess_mode, timebase_version=TIMEBASE_VERSION, outputs=EXPECTED_OUTPUTS), indent=2))
     print(f'[OK] Integrated blink/fixation artifacts: {extra}')
 
 

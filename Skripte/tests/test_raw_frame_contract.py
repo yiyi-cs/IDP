@@ -47,12 +47,12 @@ class RawFrameTests(unittest.TestCase):
             scanner = CrossRunCacheScanner(vp)
             filename = 'debug_5_ptgaze_calibrated.csv'
             (source / filename).write_text('frame\n1\n')
-            (target / 'config_used.json').write_text(json.dumps({'preprocess_mode': 'none'}))
+            (target / 'config_used.json').write_text(json.dumps({'preprocess_mode': 'none', 'timebase_version': 'frame_pts_v1'}))
             for metadata in [{'preprocess_mode': 'lanczos_2x'}, {}]:
                 (source / 'config_used.json').write_text(json.dumps(metadata))
                 self.assertFalse(scanner.copy_step_outputs(source, target, 'debug_5_ptgaze'))
                 self.assertFalse((target / filename).exists())
-            (source / 'config_used.json').write_text(json.dumps({'preprocess_mode': 'none'}))
+            (source / 'config_used.json').write_text(json.dumps({'preprocess_mode': 'none', 'timebase_version': 'frame_pts_v1'}))
             self.assertTrue(scanner.copy_step_outputs(source, target, 'debug_5_ptgaze'))
 
     def test_eyelink_cache_is_independent_of_image_processing(self):

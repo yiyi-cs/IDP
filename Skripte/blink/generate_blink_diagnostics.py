@@ -38,7 +38,13 @@ def _read_gaze(path: Path, zero_ms: float, *, eyelink: bool = False) -> pd.DataF
     else:
         time = pd.to_numeric(df["timestamp_ms_synced"], errors="coerce")
         deg = pd.to_numeric(df["gaze_deg_x_calib"], errors="coerce")
-    return pd.DataFrame({"t": (time-zero_ms)/1000.0, "x": deg}).dropna(subset=["t"])
+    out = pd.DataFrame({"t": (time-zero_ms)/1000.0, "x": deg}).dropna(subset=["t"])
+    if not eyelink and 'frame' in df:
+        gap = df['frame'].diff().gt(1)
+        separators = (time.shift(1)[gap]+time[gap])/2
+        out = pd.concat([out, pd.DataFrame({'t':(separators-zero_ms)/1000, 'x':np.nan})])
+        out = out.sort_values('t')
+    return out
 
 
 def _reps(q, pred, truth, start):
@@ -73,7 +79,7 @@ def _reps(q, pred, truth, start):
     return categories
 
 
-def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze):
+def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze,include_rois=True,diagnostic_only=False):
     fig = plt.figure(figsize=(16.5,17.8))
     outer=fig.add_gridspec(6,1,height_ratios=[1.8,1.25,1.0,.20,3.6,.06],hspace=.43)
     a=fig.add_subplot(outer[0])
@@ -122,9 +128,13 @@ def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze):
     title=fig.add_subplot(outer[3]);title.axis("off")
     title.text(0,.5,"4. Eye ROIs — first 4 events by time within each category",fontsize=11,weight="bold")
     sg=outer[4].subgridspec(3,4,wspace=.16,hspace=.56)
-    import mediapipe as mp
-    mesh=mp.solutions.face_mesh.FaceMesh(max_num_faces=1,refine_landmarks=True,
-                              min_detection_confidence=.5,min_tracking_confidence=.5)
+    mesh = None
+    if include_rois:
+        import mediapipe as mp
+        mesh=mp.solutions.face_mesh.FaceMesh(max_num_faces=1,refine_landmarks=True,
+                                  min_detection_confidence=.5,min_tracking_confidence=.5)
+    else:
+        title.text(0, -.35, "ROI images omitted: temporal diagnostic without video inference", fontsize=9)
     for i,category in enumerate(("EYELINK ONLY","WEBCAM ONLY","BOTH")):
         for k in range(4):
             ax=fig.add_subplot(sg[i,k]);ax.axis("off")
@@ -132,6 +142,10 @@ def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze):
                 if k==0: ax.text(.5,.5,f"{category}\nNo events",ha="center",va="center",transform=ax.transAxes)
                 continue
             tag,pts_s,t,reason,frame,le,re,selection=reps[category][k]
+            if not include_rois:
+                ax.text(.5, .5, f"{category}\nframe {frame} | PTS {pts_s:.3f}s\nROI not extracted",
+                        ha='center', va='center', transform=ax.transAxes, fontsize=9)
+                continue
             im=old.extract_frame_at_pts(video,pts_s)
             if im is None:
                 ax.text(.5,.5,"Frame unavailable",ha="center",va="center",transform=ax.transAxes)
@@ -142,25 +156,34 @@ def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze):
             if points is not None: label+=f"\nROI EAR L={old.ear(points[0]):.3f} R={old.ear(points[1]):.3f}"
             ax.set_title(label,fontsize=8,color=WEBCAM if category=="WEBCAM ONLY" else
                           EYELINK if category=="EYELINK ONLY" else "#38634A")
-    mesh.close()
+    if mesh is not None:
+        mesh.close()
     xmax=max(9.5,float(q.rel_s.max()) if len(q) else 9.5)
     for ax in (a,b,c):ax.set_xlim(0,xmax)
     fig.suptitle(f"{vp} — Trial {tr} — Blink diagnostic (synchronized timing)",weight="bold",fontsize=15,y=.993)
     fig.subplots_adjust(top=.962,left=.075,right=.985,bottom=.035)
+    if diagnostic_only:
+        fig.text(.075, .012, 'Blink clock diagnostic only: legacy gaze shown unchanged; frame IDs unverified; fresh inference required.',
+                 fontsize=9, color='#9B4700')
     pdf.savefig(fig,bbox_inches="tight");plt.close(fig)
 
 
-def render_run(run_dir, video, vp, method='ptgaze'):
+def render_run(run_dir, video, vp, method='ptgaze', include_rois=True):
     from blink.run_data import load_validated_gaze
     from blink.diagnostic_statistics import (synchronized_frames, predicted_intervals,
                                             metrics_for_trial, save_statistics)
     from fixation.generate_fixation_timeline_pdf import load_trials
     run = Path(run_dir)
     extra = run / 'extra'
+    config_path = run / 'config_used.json'
+    diagnostic_only = config_path.exists() and json.loads(config_path.read_text()).get('diagnostic_only', False)
     filename = ('debug_5_ptgaze_calibrated.csv' if method == 'ptgaze'
                 else 'debug_5_pupil_data_calibrated.csv')
-    gaze = load_validated_gaze(run, filename)
-    frames = synchronized_frames(gaze, pd.read_csv(extra / 'blink_filter_frame_log.csv'))
+    legacy_context = diagnostic_only and json.loads(config_path.read_text()).get('legacy_gaze_context', False)
+    if not legacy_context:
+        load_validated_gaze(run, filename)
+    from shared.frame_timing import synchronized_frame_log
+    frames = synchronized_frame_log(pd.read_csv(extra / 'blink_filter_frame_log.csv'), run)
     regions = pd.read_csv(extra / 'blink_filter_regions.csv')
     eye = pd.read_csv(extra / 'eyelink_blink_benchmark.csv')
     trials = load_trials(run / 'phases_detected.json')
@@ -185,6 +208,6 @@ def render_run(run_dir, video, vp, method='ptgaze'):
                     method_gaze[label] = _read_gaze(run / name, start)
             method_gaze['EyeLink'] = _read_gaze(run / 'debug_3_eyetracker_data.csv', start, eyelink=True)
             reps = _reps(q, pred, truth, start)
-            _trial_page(pdf, vp, tr.trial_number, q, pred, truth, reps, video, method_gaze)
+            _trial_page(pdf, vp, tr.trial_number, q, pred, truth, reps, video, method_gaze, include_rois, diagnostic_only)
     save_statistics(extra, vp, metrics, records)
     return pdf_path

@@ -39,6 +39,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 # =================================================================================
 # IMPORTS
 # =================================================================================
+from shared.frame_timing import TIMEBASE_VERSION
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Set, Tuple
 import json
@@ -105,6 +106,7 @@ class RunConfig:
     analysis_mode: int              # 1 oder 2
     methods: str                    # 'mediapipe', 'ptgaze', 'both'
     preprocess_mode: str = "none"
+    timebase_version: str = TIMEBASE_VERSION
     
     def matches(self, other: 'RunConfig', ignore_fields: List[str] = None) -> bool:
         """
@@ -122,6 +124,8 @@ class RunConfig:
         if 'calib_mode' not in ignore_fields and self.calib_mode != other.calib_mode:
             return False
         if 'analysis_mode' not in ignore_fields and self.analysis_mode != other.analysis_mode:
+            return False
+        if 'timebase_version' not in ignore_fields and self.timebase_version != other.timebase_version:
             return False
         if 'methods' not in ignore_fields and self.methods != other.methods:
             return False
@@ -222,6 +226,10 @@ CACHE_CRITERIA = {
 }
 
 # Mapping: Step -> erwartete Output-Dateien
+for _step_criteria in CACHE_CRITERIA.values():
+    if 'preprocess_mode' in _step_criteria:
+        _step_criteria.append('timebase_version')
+
 STEP_OUTPUT_FILES = {
     'debug_0': ['phases_detected.json'],
     'debug_1_mediapipe': ['debug_1_pupil_data.csv', 'debug_1_metadata.json'],
@@ -645,7 +653,8 @@ class VPDataManager:
                 calib_mode=data.get('calib_mode', ''),
                 analysis_mode=data.get('analysis_mode', 2),
                 methods=data.get('methods', 'both'),
-                preprocess_mode=data.get('preprocess_mode', 'unknown')
+                preprocess_mode=data.get('preprocess_mode', 'unknown'),
+                timebase_version=data.get('timebase_version', 'legacy_fps')
             )
         except (json.JSONDecodeError, KeyError):
             return None

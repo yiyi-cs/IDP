@@ -1224,3 +1224,4 @@ class DetailedPupilDebugger:
         if self.cap is not None:
             self.cap.release()
         self.detector.close()
+

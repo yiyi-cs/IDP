@@ -20,6 +20,7 @@ root.mkdir(parents=True,exist_ok=True)
 t=np.arange(0.,4000.,20.)
 gaze=pd.DataFrame(dict(frame=np.arange(len(t)),timestamp_ms_synced=50000+t,
     trial_assignment=1,phase_type=np.where(t<1500,'fixation','stimulus'),
+    timestamp_ms=t+90000,timestamp_source='frame_pts_v1',
     gaze_deg_x_calib=np.sin(t/70)*0.1,valid_eye_frame=True,detected=True))
 for filename in ['debug_5_ptgaze_calibrated.csv','debug_5_pupil_data_calibrated.csv']:
     gaze.to_csv(root/filename,index=False)
@@ -30,6 +31,7 @@ phases={'phases': {'experiment_block1': {'trials': [dict(trial_number=1,is_pract
     fixation=dict(start_video_s=0.,end_video_s=1.5,start_eyelink_ms=50000,end_eyelink_ms=51500),
     stimulus=dict(start_video_s=1.5,end_video_s=4.,start_eyelink_ms=51500,end_eyelink_ms=54000))]}}}
 (root/'phases_detected.json').write_text(json.dumps(phases))
+(root/'debug_4_sync_info.json').write_text(json.dumps({'offset_used_ms':-40000}))
 video=root/'synthetic.mp4';video.touch();asc=root/'synthetic.asc';asc.touch()
 
 def export(video_path, output_dir, **kwargs):

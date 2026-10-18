@@ -495,3 +495,4 @@ if __name__ == "__main__":
         print("FEHLER BEI KALIBRIERUNG")
         print(f"{'='*70}")
         print(f"\n[!] Grund: {cal_info.get('reason', 'unknown')}")
+

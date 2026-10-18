@@ -287,7 +287,11 @@ def render_run(run_dir, vp, method="ptgaze", trial_numbers=None):
     extra = run_dir / 'extra'
     gaze_file = ('debug_5_ptgaze_calibrated.csv' if method == 'ptgaze'
                  else 'debug_5_pupil_data_calibrated.csv')
-    pt_df = load_validated_gaze(run_dir, gaze_file)
+    from shared.frame_timing import detector_input
+    pt_df = detector_input(load_validated_gaze(run_dir, gaze_file),
+                           pd.read_csv(extra / 'blink_filter_frame_log.csv'), run_dir)
+    config_path = run_dir / 'config_used.json'
+    diagnostic_only = config_path.exists() and json.loads(config_path.read_text()).get('diagnostic_only', False)
     trials = load_trials(run_dir / 'phases_detected.json')
     if trial_numbers is not None:
         trials = [t for t in trials if t.trial_number in trial_numbers]
@@ -311,6 +315,9 @@ def render_run(run_dir, vp, method="ptgaze", trial_numbers=None):
                     if legend:
                         for text in legend.get_texts():
                             text.set_text(text.get_text().replace('PTGaze', 'MediaPipe'))
+            if diagnostic_only:
+                fig.subplots_adjust(bottom=.11)
+                fig.text(.08, .012, 'Temporal diagnostic only: legacy model outputs; not a raw-frame acceptance result.', fontsize=8, color='#9B4700')
             pdf.savefig(fig, bbox_inches='tight')
             plt.close(fig)
     return pdf_path

@@ -48,8 +48,17 @@ def join_blink_mask(gaze, frames):
 
 def load_validated_gaze(run_dir, filename):
     run = Path(run_dir)
-    return join_blink_mask(pd.read_csv(run / filename),
-                          pd.read_csv(run / 'extra' / 'blink_filter_frame_log.csv'))
+    frames = pd.read_csv(run / 'extra' / 'blink_filter_frame_log.csv')
+    out = join_blink_mask(pd.read_csv(run / filename), frames)
+    from shared.frame_timing import sync_offset
+    reference = frames.set_index('frame_number')['video_time_ms']
+    expected = out['frame'].map(reference).to_numpy(float) + sync_offset(run)
+    error = np.abs(out['timestamp_ms_synced'].to_numpy(float) - expected)
+    if error.max() > 0.01:
+        raise ValueError(f'Calibrated gaze has an obsolete or mismatched timebase: '
+                         f'max frame clock error {error.max():.3f} ms. '
+                         'Use temporal diagnostic repair or rerun with frame_pts_v1; no silent shift.')
+    return out
 
 
 def stable_events(events):

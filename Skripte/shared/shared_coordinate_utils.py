@@ -412,3 +412,4 @@ if __name__ == "__main__":
     print(f"[TEST] Monitor Bounds: +/-{max_x:.1f} deg X, +/-{max_y:.1f} deg Y")
     
     print("\n[OK] Test erfolgreich!")
+

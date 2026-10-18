@@ -722,3 +722,4 @@ if __name__ == "__main__":
     else:
         print(f"\n️ phases_detected.json nicht gefunden")
         print(f"   Pfad: {PHASES_JSON}")
+

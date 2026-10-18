@@ -39,6 +39,7 @@ from tqdm import tqdm
 from typing import List, Tuple, Optional, Dict
 from config import *
 from shared.shared_pupil_detection import RobustPupilDetector
+from shared.frame_timing import load_frame_clock, exact_frame_window, phase_offset, TIMEBASE_VERSION
 from shared.shared_image_preprocessing import preprocess_frame, validate_preprocess_mode
 
 # Environment-Variable-Overrides (für master_cli.py)
@@ -190,6 +191,7 @@ class PupilDetector:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fps = fps
+        self.frame_clock = load_frame_clock(video_path, OUTPUT_BASE_DIR)
         
         print(f"   Video: {width}x{height} @ {fps:.1f} FPS")
         
@@ -205,25 +207,29 @@ class PupilDetector:
         # Iteriere über Trials
         # ═══════════════════════════════════════════════════════════════
         
+        processed_frames = set()
         for trial in tqdm(all_trials, desc="Verarbeite Trials"):
             trial_num = trial['trial_number']
             
             # Zeitfenster (Fixation + Stimulus + Buffer)
             start_s = trial['fixation']['start_video_s'] - 0.5  # 0.5s Buffer
             end_s = trial['stimulus']['end_video_s']
+            offset_ms = phase_offset(phases)
+            start_s = min(start_s, (trial['fixation']['start_eyelink_ms']-offset_ms)/1000-.5)
+            end_s = max(end_s, (trial['stimulus']['end_eyelink_ms']-offset_ms)/1000)
             
-            start_frame = int(start_s * fps)
-            end_frame = int(end_s * fps)
+            start_frame, end_frame = self.frame_clock.bounds(start_s, end_s)
             
             # Springe zu Start
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
             
             # Verarbeite Frames in diesem Trial
-            for frame_num in range(start_frame, end_frame):
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            for frame_num, frame in exact_frame_window(
+                    video_path, self.frame_clock, start_frame, end_frame, width, height):
                 
+                if frame_num in processed_frames:
+                    continue
+                processed_frames.add(frame_num)
                 frame = preprocess_frame(frame, PREPROCESS_MODE)
                 
                 # Detektiere Pupille
@@ -273,6 +279,7 @@ class PupilDetector:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fps = fps
+        self.frame_clock = load_frame_clock(video_path, OUTPUT_BASE_DIR)
         
         print(f"Video: {Path(video_path).name}")
         print(f"  {width}x{height} @ {fps:.1f} FPS")
@@ -324,8 +331,7 @@ class PupilDetector:
         Detektiert Pupille + Blink/Invalid-Eye-State.
 
         Wichtig:
-        - Zeitlogik bleibt unverändert, damit die bestehende
-        Synchronisation nicht beeinflusst wird.
+        - Video timestamps come from the shared presentation-time clock.
         - Alle Blink-/Invalid-Eye-Felder aus RobustPupilDetector
         werden in debug_1_pupil_data.csv weitergegeben.
         """
@@ -397,11 +403,12 @@ class PupilDetector:
 
             result = {
                 "frame": frame_number,
+                "timestamp_source": TIMEBASE_VERSION,
 
                 # WICHTIG:
-                # bestehende Pipeline-Zeitachse NICHT verändern.
+                # Presentation time converted upstream; never frame / average FPS.
                 "timestamp_ms":
-                    frame_number * (1000 / self.fps)
+                    self.frame_clock.at(frame_number)
                     + timestamp_offset_ms,
 
                 "trial_number": None,
@@ -456,10 +463,11 @@ class PupilDetector:
 
             result = {
                 "frame": frame_number,
+                "timestamp_source": TIMEBASE_VERSION,
 
-                # Auch hier bestehende Zeitachse beibehalten.
+                # Same presentation clock for failed detections.
                 "timestamp_ms":
-                    frame_number * (1000 / self.fps)
+                    self.frame_clock.at(frame_number)
                     + timestamp_offset_ms,
 
                 "trial_number": None,

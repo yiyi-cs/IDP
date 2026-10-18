@@ -40,6 +40,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 
 from blink.run_data import load_validated_gaze, stable_events
+from shared.frame_timing import detector_input
 
 from fixation.fixation_detector import (
     FixationConfig,
@@ -134,6 +135,9 @@ def run_method(
     )
 
     df = load_validated_gaze(OUTPUT_BASE_DIR, input_path.name)
+    df = detector_input(df, pd.read_csv(OUTPUT_BASE_DIR / 'extra' / 'blink_filter_frame_log.csv'),
+                        OUTPUT_BASE_DIR)
+    df.to_csv(OUTPUT_BASE_DIR / 'extra' / f'{method}_fixation_input.csv', index=False)
 
     validate_input(
         df,
@@ -268,7 +272,7 @@ def run_method(
             "timestamp_ms_synced",
 
         "eye_validity_source": "extra/blink_filter_frame_log.csv",
-        "blink_merge": "frame == frame_number; one_to_one; complete coverage",
+        "blink_merge": "frame == frame_number; one_to_one; complete coverage; missing model rows invalid",
         "blink_match_pct": 100.0,
 
         "n_samples":

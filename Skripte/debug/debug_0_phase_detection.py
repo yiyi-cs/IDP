@@ -4273,3 +4273,4 @@ if __name__ == "__main__":
     
     # Run
     run_phase_detection(video_path, json_path, output_dir)
+

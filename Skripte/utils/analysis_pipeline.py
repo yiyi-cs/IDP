@@ -40,6 +40,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 # IMPORTS
 # =================================================================================
 from shared.shared_image_preprocessing import validate_preprocess_mode
+from shared.frame_timing import TIMEBASE_VERSION
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple
 import subprocess
@@ -75,6 +76,7 @@ class RunConfiguration:
     analysis_mode: int = 2                      # 1=Standalone, 2=Comparison
     methods: str = 'both'                       # 'mediapipe', 'ptgaze', 'both'
     preprocess_mode: str = 'none'
+    timebase_version: str = TIMEBASE_VERSION
     calibration_pkl_path: Optional[Path] = None
     calibration_ptgaze_pkl_path: Optional[Path] = None
     
@@ -83,6 +85,8 @@ class RunConfiguration:
     
     def __post_init__(self):
         validate_preprocess_mode(self.preprocess_mode)
+        if self.timebase_version != TIMEBASE_VERSION:
+            raise ValueError('Production pipeline requires frame_pts_v1 timebase')
 
     def __str__(self):
         calib_info = "Auto-Create" if self.create_calibration else f"Custom"
@@ -95,7 +99,8 @@ class RunConfiguration:
             calib_mode=self.calib_mode,
             analysis_mode=self.analysis_mode,
             methods=self.methods,
-            preprocess_mode=self.preprocess_mode
+            preprocess_mode=self.preprocess_mode,
+            timebase_version=self.timebase_version
         )
 
 @dataclass
@@ -363,8 +368,10 @@ class CrossRunCacheScanner:
             source_config = self._get_run_config(source_run) or {}
             target_config = self._get_run_config(target_run) or {}
             if (source_config.get('preprocess_mode') != 'none'
-                    or target_config.get('preprocess_mode') != 'none'):
-                print(f"      [CACHE REJECTED] {step}: raw-frame provenance required")
+                    or target_config.get('preprocess_mode') != 'none'
+                    or source_config.get('timebase_version') != TIMEBASE_VERSION
+                    or target_config.get('timebase_version') != TIMEBASE_VERSION):
+                print(f"      [CACHE REJECTED] {step}: raw-frame and presentation-time provenance required")
                 return False
 
         filenames = self.output_mapping[step]
@@ -544,6 +551,16 @@ class AnalysisPipeline:
             (success, error_message) - success=False wenn VP uebersprungen werden soll
         """
         
+        for calibration in [config.calibration_pkl_path, config.calibration_ptgaze_pkl_path]:
+            if calibration is not None:
+                provenance = Path(calibration).parent / 'config_used.json'
+                if not provenance.exists():
+                    return False, "Custom calibration needs verified raw-frame / frame_pts_v1 provenance"
+                saved = json.loads(provenance.read_text())
+                if (saved.get('preprocess_mode') != 'none'
+                        or saved.get('timebase_version') != TIMEBASE_VERSION):
+                    return False, "Custom calibration uses obsolete image processing or frame timebase"
+
         # Check 1: Video vorhanden?
         video_path = self.vp_data.videos.get(config.video_fps)
         if video_path is None:
@@ -1369,11 +1386,12 @@ class AnalysisPipeline:
             'analysis_mode': config.analysis_mode,
             'methods': config.methods,  # NEU v2.1
             'preprocess_mode': config.preprocess_mode,
+            'timebase_version': TIMEBASE_VERSION,
             'create_calibration': config.create_calibration,
             'calibration_pkl_path': str(config.calibration_pkl_path) if config.calibration_pkl_path else None,
             'calibration_ptgaze_pkl_path': str(config.calibration_ptgaze_pkl_path) if config.calibration_ptgaze_pkl_path else None,
             'timestamp': datetime.now().isoformat(),
-            'pipeline_version': '2.1'
+            'pipeline_version': '2.2-frame-pts'
         }
         
         with open(run_folder / 'config_used.json', 'w', encoding='utf-8') as f:

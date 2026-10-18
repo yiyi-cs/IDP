@@ -207,6 +207,14 @@ else:
     print(f"  >> ptgaze-Sync wird uebersprungen (nur MediaPipe)")
     print(f"  >> Falls ptgaze gewuenscht: Laufe debug_1_ptgaze.py zuerst")
 
+# Reject cached nominal-FPS timestamps rather than synchronizing the wrong clock.
+from shared.frame_timing import TIMEBASE_VERSION, assign_trials
+for _name, _data in [('MediaPipe', pupil_data), ('PTGaze', ptgaze_data if ptgaze_available else None)]:
+    if _data is not None:
+        if ('timestamp_source' not in _data
+                or not _data['timestamp_source'].eq(TIMEBASE_VERSION).all()):
+            raise ValueError(f'{_name}: missing frame_pts_v1 timestamps; regenerate image-dependent steps')
+
 # ==================== SCHRITT 4: WENDE OFFSET AN (EINE ZEILE!) ====================
 
 pupil_data_synced = pupil_data.copy()
@@ -716,6 +724,9 @@ print("EXPORT")
 print(f"{'='*70}\n")
 
 output_path = os.path.join(OUTPUT_BASE_DIR, "debug_4_pupil_data_synced.csv")
+pupil_data_synced = assign_trials(pupil_data_synced, phases)
+if ptgaze_available and ptgaze_data_synced is not None:
+    ptgaze_data_synced = assign_trials(ptgaze_data_synced, phases)
 pupil_data_synced.to_csv(output_path, index=False)
 print(f" Pupil-Data: {output_path}")
 
@@ -730,6 +741,7 @@ if ptgaze_available and ptgaze_data_synced is not None:
 sync_info_export = make_json_serializable({
     'sync_method': sync_method,
     'offset_ms': float(offset_ms),
+    'timebase_version': TIMEBASE_VERSION,
     'offset_used_ms': float(offset_used),  # NEU: Tatsaechlich genutzter Offset
     'confidence': float(confidence),
     'source': 'phases_detected.json',
@@ -804,3 +816,4 @@ if sync_method == 'dual_anchor' and 'offset_880hz_ms' in sync_info:
     print(f"      Trials (880 Hz):        {sync_info['offset_880hz_ms']:.0f} ms")
     print(f"      Differenz:              {sync_info.get('frequency_difference_ms', 0):+.0f} ms")
     print(f"      >> Daten nutzen Trial-Offset für optimale Korrelation!")
+

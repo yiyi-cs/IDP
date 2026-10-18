@@ -1008,3 +1008,4 @@ __all__ = [
 if __name__ == "__main__":
     print("adaptive_sync_detection.py v2.0 - Multi-Method Detection")
     print("Importiere in debug_0_phase_detection.py für Verwendung.")
+

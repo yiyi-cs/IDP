@@ -1166,3 +1166,4 @@ if __name__ == "__main__":
     else:
         print(f"\n[!] Test-Ordner nicht gefunden")
         print(f"    Bitte Pfad anpassen oder Modul importieren")
+

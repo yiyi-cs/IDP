@@ -53,6 +53,7 @@ SKRIPTE_DIR = Path(__file__).resolve().parents[1]
 if str(SKRIPTE_DIR) not in sys.path:
     sys.path.insert(0, str(SKRIPTE_DIR))
 from shared.shared_pupil_detection import RobustPupilDetector
+from shared.frame_timing import load_frame_clock
 from shared.shared_image_preprocessing import preprocess_frame, validate_preprocess_mode
 
 # =============================================================================
@@ -659,7 +660,7 @@ def export_blink_filter_logs(
             raise RuntimeError("Video reports zero frames.")
 
         frame_duration_ms = 1000.0 / fps
-        frame_timestamps_ms = load_frame_timestamps_ms(video_path_obj, total_frames)
+        frame_timestamps_ms = load_frame_clock(video_path_obj, output_dir_obj.parent).times_ms.tolist()
         if frame_timestamps_ms is not None:
             timestamp_mode = "PTS"
 
