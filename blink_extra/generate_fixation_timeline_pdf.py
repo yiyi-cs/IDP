@@ -93,45 +93,45 @@ def load_trials(phases_json: Path, include_practice: bool = False) -> List[Trial
     return out
 
 
-def load_blink_intervals(frame_log_csv: Path, trials: List[TrialInfo]) -> Dict[int, List[Tuple[float, float]]]:
-    df = pd.read_csv(frame_log_csv)
-    if 'video_time_ms' not in df.columns:
-        raise ValueError('blink_filter_frame_log.csv missing video_time_ms')
-    # Determine invalid / interrupted frames.
-    if 'valid_eye_frame' in df.columns:
-        invalid_mask = ~pd.Series(df['valid_eye_frame']).fillna(False).astype(bool)
-    else:
-        invalid_mask = pd.Series(False, index=df.index)
-    if 'eyes_closed' in df.columns:
-        invalid_mask |= pd.Series(df['eyes_closed']).fillna(False).astype(bool)
-    if 'is_blink' in df.columns:
-        invalid_mask |= pd.Series(df['is_blink']).fillna(False).astype(bool)
-    if 'is_transition_frame' in df.columns:
-        invalid_mask |= pd.Series(df['is_transition_frame']).fillna(False).astype(bool)
-    times = pd.to_numeric(df['video_time_ms'], errors='coerce').to_numpy()
-    out: Dict[int, List[Tuple[float, float]]] = {t.trial_number: [] for t in trials}
+def load_blink_intervals(frame_log_csv: Path, trials: List[TrialInfo],
+                         pt_df: pd.DataFrame) -> Dict[int, List[Tuple[float, float]]]:
+    """Return invalid-eye intervals in trial-relative *EyeLink synchronized* ms.
 
-    # Group contiguous invalid rows by frame order.
-    idx = np.where(invalid_mask.to_numpy())[0]
-    if len(idx) == 0:
-        return out
-    groups = [[idx[0]]]
-    for i in idx[1:]:
-        if i == groups[-1][-1] + 1:
-            groups[-1].append(i)
-        else:
-            groups.append([i])
-
-    for g in groups:
-        start_ms = times[g[0]]
-        end_ms = times[g[-1]]
-        if not np.isfinite(start_ms) or not np.isfinite(end_ms):
+    Match video frame numbers to PTGaze frames first. Never subtract raw PTS
+    from a phase's video timestamp: the clocks can have different offsets.
+    """
+    log = pd.read_csv(frame_log_csv)
+    if not {'frame_number', 'valid_eye_frame'}.issubset(log.columns):
+        raise ValueError("Blink frame log needs frame_number and valid_eye_frame")
+    if 'frame' not in pt_df.columns:
+        raise ValueError("PTGaze file needs frame for exact blink-log join")
+    pt_small = pt_df[['frame', 'trial_number', 'timestamp_ms_synced']].copy()
+    joined = pt_small.merge(log[['frame_number', 'valid_eye_frame']],
+                            left_on='frame', right_on='frame_number', how='left',
+                            validate='one_to_one')
+    if joined['valid_eye_frame'].isna().any():
+        raise ValueError("Some PTGaze frames have no matching blink validity entry")
+    trial_by_id = {t.trial_number: t for t in trials}
+    out = {t.trial_number: [] for t in trials}
+    for trial_number, group in joined.groupby('trial_number', sort=False):
+        if pd.isna(trial_number) or int(trial_number) not in trial_by_id:
             continue
-        for tr in trials:
-            s = max(start_ms, tr.trial_start_video_ms)
-            e = min(end_ms, tr.trial_end_video_ms)
-            if e > s:
-                out[tr.trial_number].append((s - tr.trial_start_video_ms, e - tr.trial_start_video_ms))
+        tr = trial_by_id[int(trial_number)]
+        group = group.sort_values('timestamp_ms_synced').reset_index(drop=True)
+        time = group['timestamp_ms_synced'].to_numpy(float)
+        invalid = ~group['valid_eye_frame'].astype(bool).to_numpy()
+        ids = np.flatnonzero(invalid)
+        if not len(ids):
+            continue
+        runs = np.split(ids, np.flatnonzero(np.diff(ids) > 1) + 1)
+        for r in runs:
+            # Boundaries at sample midpoints, giving the shaded intervals
+            # a meaningful width while retaining the detector's clock.
+            i, j = int(r[0]), int(r[-1])
+            left = (time[i-1] + time[i])/2 if i > 0 else time[i]
+            right = (time[j] + time[j+1])/2 if j+1 < len(time) else time[j]
+            out[tr.trial_number].append(
+                (left - tr.trial_start_eye_ms, right - tr.trial_start_eye_ms))
     return out
 
 
@@ -477,15 +477,15 @@ def main():
     if wanted is not None:
         trials = [t for t in trials if t.trial_number in wanted]
 
-    blink_intervals = load_blink_intervals(frame_log_path, trials)
     pt_df = load_ptgaze(ptgaze_path)
+    blink_intervals = load_blink_intervals(frame_log_path, trials, pt_df)
     eye_df = load_eyelink_gaze(eyelink_gaze_path)
     native_fix = load_fixations_native(native_fix_path)
     ours_pt = load_fixations_ours(ours_pt_path)
 
     # Fit participant-level P75 using all non-practice trials, even for --trial 1.
     all_trials = load_trials(phases_path, include_practice=False)
-    all_blinks = load_blink_intervals(frame_log_path, all_trials)
+    all_blinks = load_blink_intervals(frame_log_path, all_trials, pt_df)
     ours_eye, mean_thr = build_eyelink_sanity(all_trials, eye_df, pt_df, all_blinks)
     ours_eye_path = out_dir / f'{args.vp}_debug_6_eyelink_fixations_sanity.csv'
     ours_eye.to_csv(ours_eye_path, index=False)
