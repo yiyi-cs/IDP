@@ -1577,15 +1577,4 @@ def main():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--video-root", type=Path, required=True)
-    args = parser.parse_args()
-
-    cli = MasterCLI(
-    args.data_root,
-    SCRIPTS_FOLDER,
-    args.video_root
-)
-    cli.run()
     main()

@@ -17,7 +17,7 @@ Both use the same fixation detector:
     - 100 ms minimum fixation duration
     - 50 ms maximum invalid gap
 
-No external blink CSV is required.
+The current Run extra/blink_filter_frame_log.csv is required and joined by frame.
 """
 
 import json
@@ -39,6 +39,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 
+from blink.run_data import load_validated_gaze, stable_events
+
 from fixation.fixation_detector import (
     FixationConfig,
     detect_fixations,
@@ -49,24 +51,7 @@ from fixation.fixation_detector import (
 # PIPELINE PATH
 # =============================================================================
 
-if "PIPELINE_OUTPUT_BASE_DIR" in os.environ:
-    OUTPUT_BASE_DIR = Path(
-        os.environ["PIPELINE_OUTPUT_BASE_DIR"]
-    )
-else:
-    # Manual execution:
-    # python fixation/run_fixation_detection.py /path/to/run
-    if len(sys.argv) < 2:
-        raise SystemExit(
-            "Usage:\n"
-            "  python fixation/run_fixation_detection.py "
-            "/path/to/Run_xxx"
-        )
-
-    OUTPUT_BASE_DIR = Path(
-        sys.argv[1]
-    )
-
+OUTPUT_BASE_DIR = Path(os.environ.get("PIPELINE_OUTPUT_BASE_DIR", "."))
 
 PIPELINE_METHODS = os.environ.get(
     "PIPELINE_METHODS",
@@ -148,9 +133,7 @@ def run_method(
         f"Input: {input_path.name}"
     )
 
-    df = pd.read_csv(
-        input_path
-    )
+    df = load_validated_gaze(OUTPUT_BASE_DIR, input_path.name)
 
     validate_input(
         df,
@@ -187,7 +170,7 @@ def run_method(
     )
 
     fixations = (
-        result.fixations
+        stable_events(result.fixations)
     )
 
     noise = (
@@ -284,12 +267,9 @@ def run_method(
         "timestamp_source":
             "timestamp_ms_synced",
 
-        "eye_validity_source":
-            (
-                "mediapipe"
-                if method == "mediapipe"
-                else "mediapipe_propagated"
-            ),
+        "eye_validity_source": "extra/blink_filter_frame_log.csv",
+        "blink_merge": "frame == frame_number; one_to_one; complete coverage",
+        "blink_match_pct": 100.0,
 
         "n_samples":
             len(df),
@@ -386,6 +366,11 @@ def run_method(
 # =============================================================================
 
 def main():
+    global OUTPUT_BASE_DIR
+    if "PIPELINE_OUTPUT_BASE_DIR" not in os.environ:
+        if len(sys.argv) != 2:
+            raise SystemExit("Usage: python fixation/run_fixation_detection.py /path/to/Run")
+        OUTPUT_BASE_DIR = Path(sys.argv[1])
 
     print("=" * 70)
     print("INTEGRATED FIXATION DETECTION")
@@ -445,11 +430,7 @@ def main():
                 f"{input_path.name} not found"
             )
 
-            skipped.append(
-                method
-            )
-
-            continue
+            raise FileNotFoundError(f"Requested {method} input missing: {input_path}")
 
         try:
 

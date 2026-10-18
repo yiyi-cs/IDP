@@ -18,7 +18,7 @@ debug_0 -> debug_1_mediapipe -> debug_1_ptgaze ->
 offline_calibration -> offline_calibration_ptgaze ->
 debug_3 -> debug_4 -> 
 debug_5_mediapipe -> debug_5_ptgaze -> 
-fixation_detection -> debug_6
+blink exports -> fixation_detection -> sanity / PDFs -> debug_6
 
 Version: 2.0
 Datum: 2025-01
@@ -906,7 +906,7 @@ class AnalysisPipeline:
             # =========================================================
 
             print(f"\n{'---'*23}")
-            print("[10/11] Fixation Detection (MediaPipe / ptgaze)")
+            print("[10/11] Blink / Fixation Detection + Diagnostics")
             print(f"{'---'*23}")
 
             success, msg = self._run_fixation_detection(config, output_dir)
@@ -1280,22 +1280,29 @@ class AnalysisPipeline:
     def _run_fixation_detection(self, config: RunConfiguration, output_dir: Path) -> tuple:
         """Fuehrt integrierte Fixation Detection fuer verfuegbare Gaze-Methoden aus."""
 
-        script = self.scripts_folder / 'fixation' / 'run_fixation_detection.py'
+        script = self.scripts_folder / 'blink' / 'run_pipeline_extras.py'
         env = self._create_base_env(config, output_dir)
+        video = self.vp_data.videos.get(config.video_fps)
+        if video is None or self.vp_data.asc_file is None:
+            return False, "Blink integration requires the selected video and ASC file"
+        command = [sys.executable, str(script), '--run-dir', str(output_dir),
+                   '--video', str(video), '--asc', str(self.vp_data.asc_file),
+                   '--vp', config.vp_code, '--methods', config.methods,
+                   '--preprocess-mode', config.preprocess_mode]
 
-        print(f"      >> Fuehre Fixation Detection aus (MediaPipe / ptgaze)...")
+        print("      >> Blink exports, fixation, EyeLink sanity and two diagnostic PDFs...")
 
         try:
             result = subprocess.run(
-                [sys.executable, str(script)],
+                command,
                 cwd=self.scripts_folder,
                 env=env,
-                timeout=300
+                timeout=7200
             )
 
             return (True, "OK") if result.returncode == 0 else (False, f"Exit {result.returncode}")
         except subprocess.TimeoutExpired:
-            return False, "Timeout (300s)"
+            return False, "Timeout (7200s)"
         except Exception as e:
             return False, str(e)
 
@@ -1453,3 +1460,4 @@ if __name__ == "__main__":
     print("  - Erweiterte Cache-Unterstuetzung fuer ptgaze")
     print("  - 11 Pipeline-Schritte (inkl. Fixation Detection)")
     print("\n" + "="*70)
+
