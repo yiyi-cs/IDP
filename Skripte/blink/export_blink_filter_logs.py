@@ -696,7 +696,10 @@ def export_blink_filter_logs(
         if export_end_frame <= export_start_frame:
             raise ValueError("The selected frame range is empty.")
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, warmup_start_frame)
+        # Sequential skips preserve actual frame ordinals on VFR recordings.
+        for skipped_frame in range(warmup_start_frame):
+            if not cap.grab():
+                raise RuntimeError(f'Video stopped before warm-up at frame {skipped_frame}')
 
         detector = RobustPupilDetector()
         reset_detector_state(detector)
@@ -723,11 +726,8 @@ def export_blink_filter_logs(
             ret, frame = cap.read()
 
             if not ret:
-                print(
-                    f"[WARN] Video read stopped at frame {frame_number}.",
-                    file=sys.stderr,
-                )
-                break
+                raise RuntimeError(f'Video decode stopped at frame {frame_number}; '
+                                   f'expected frames through {export_end_frame - 1}')
 
             frame = preprocess_frame(frame, preprocess_mode)
             result = detector.extract_from_frame(frame)

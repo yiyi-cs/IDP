@@ -46,18 +46,29 @@ def join_blink_mask(gaze, frames):
     return out
 
 
+def validate_gaze_clock(gaze, reference, offset_ms):
+    """Check clocks without requiring an expensive fresh blink inference pass."""
+    frame = pd.to_numeric(gaze['frame'], errors='coerce')
+    if (gaze.empty or not np.isfinite(frame).all() or (frame % 1 != 0).any()
+            or frame.duplicated().any()):
+        raise ValueError('Invalid calibrated frame IDs')
+    expected = frame.map(reference).to_numpy(float) + offset_ms
+    actual = pd.to_numeric(gaze['timestamp_ms_synced'], errors='coerce').to_numpy(float)
+    if not np.isfinite(expected).all() or not np.isfinite(actual).all():
+        raise ValueError('Missing frame coverage or non-finite synchronized timestamps')
+    error = np.abs(actual - expected)
+    if error.max() > 0.01:
+        raise ValueError(f'Calibrated gaze has an obsolete or mismatched timebase: '
+                         f'max frame clock error {error.max():.3f} ms. '
+                         'Use temporal diagnostic repair or rerun with frame_pts_v1; no silent shift.')
+
+
 def load_validated_gaze(run_dir, filename):
     run = Path(run_dir)
     frames = pd.read_csv(run / 'extra' / 'blink_filter_frame_log.csv')
     out = join_blink_mask(pd.read_csv(run / filename), frames)
     from shared.frame_timing import sync_offset
-    reference = frames.set_index('frame_number')['video_time_ms']
-    expected = out['frame'].map(reference).to_numpy(float) + sync_offset(run)
-    error = np.abs(out['timestamp_ms_synced'].to_numpy(float) - expected)
-    if error.max() > 0.01:
-        raise ValueError(f'Calibrated gaze has an obsolete or mismatched timebase: '
-                         f'max frame clock error {error.max():.3f} ms. '
-                         'Use temporal diagnostic repair or rerun with frame_pts_v1; no silent shift.')
+    validate_gaze_clock(out, frames.set_index('frame_number')['video_time_ms'], sync_offset(run))
     return out
 
 

@@ -111,7 +111,10 @@ class PtgazeCalibrationManager:
         # Suche nach calibration_ptgaze_*.pkl
         pkl_files = list(Path(OUTPUT_BASE_DIR).glob("calibration_ptgaze_*.pkl"))
         
-        if not pkl_files:
+        if 'PIPELINE_CALIBRATION_PKL_PATH' in os.environ:
+            # The orchestrator's explicit artifact takes precedence over old files.
+            pkl_path = Path(os.environ['PIPELINE_CALIBRATION_PKL_PATH'])
+        elif not pkl_files:
             # Fallback: Nutze Standard-Name aus config
             pkl_path = Path(CALIBRATION_PKL_PATH)
             if not pkl_path.exists():
@@ -188,11 +191,14 @@ class PtgazeCalibrationManager:
         
         # Extrahiere valide Samples
         valid_mask = (
-            gaze_data['gaze_pitch_deg'].notna() &
-            gaze_data['gaze_yaw_deg'].notna() &
+            np.isfinite(gaze_data['gaze_pitch_deg']) &
+            np.isfinite(gaze_data['gaze_yaw_deg']) &
             (gaze_data.get('confidence', 1.0) >= MIN_CONFIDENCE)
         )
         
+        if not valid_mask.any():
+            return gaze_data, {'success': False, 'reason': 'no_valid_gaze_samples'}
+
         # WICHTIG: Input ist (pitch, yaw) in GRAD!
         X = gaze_data.loc[valid_mask, ['gaze_pitch_deg', 'gaze_yaw_deg']].values
         
@@ -397,11 +403,9 @@ if __name__ == "__main__":
         # Nach Synchronisation
         gaze_csv = os.path.join(OUTPUT_BASE_DIR, "debug_4_ptgaze_gaze_synced.csv")
         
-        # Fallback: Falls debug_4 nicht gelaufen (ptgaze ist generisch!)
+        # Comparison mode must retain the synchronized EyeLink clock.
         if not os.path.exists(gaze_csv):
-            print(f"[!] debug_4_ptgaze_gaze_synced.csv nicht gefunden")
-            print(f"   >> Versuche debug_1_ptgaze_data.csv (Fallback)")
-            gaze_csv = os.path.join(OUTPUT_BASE_DIR, "debug_1_ptgaze_data.csv")
+            raise FileNotFoundError(f'Synchronized PTGaze input required: {gaze_csv}')
         
         if not os.path.exists(gaze_csv):
             print(f"[!] FEHLER: Weder debug_4 noch debug_1 Output gefunden!")
@@ -495,4 +499,5 @@ if __name__ == "__main__":
         print("FEHLER BEI KALIBRIERUNG")
         print(f"{'='*70}")
         print(f"\n[!] Grund: {cal_info.get('reason', 'unknown')}")
+        raise SystemExit(1)
 

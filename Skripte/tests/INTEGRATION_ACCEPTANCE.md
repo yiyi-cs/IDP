@@ -1,6 +1,7 @@
 # Raw-frame / exact-frame-time pipeline acceptance
 
-Base remote branch: yiyi-cs/IDP Blink-Detection, 2068bae.
+Audited remote branch: yiyi-cs/IDP Blink-Detection, 1bd8a22edb19ba0a54a97a5eb2f02914287e44de.
+The audit fixes are local additions to that remote snapshot; they have not been pushed.
 
 ## Corrected contract
 
@@ -51,8 +52,10 @@ PYTHONPATH=Skripte python -m unittest discover -s Skripte/tests -v
 python -m compileall -q Skripte
 ```
 
-20 tests pass. One test generates a genuine VFR video and checks every selected
-frame pixel-for-pixel against full sequential ffmpeg decoding. Other tests cover
+31 tests pass. Generated FFV1 and H.264 VFR videos (including B-frames and a
+nonzero PTS origin) check selected frame pixels against full sequential decoding.
+Both real calibration CLIs are exercised with fitted synthetic regression models,
+including explicit PKL selection, synchronized timestamps and failure exit status. Other tests cover
 frame-mask coverage, legacy-clock rejection, raw-frame cache isolation, event gaps,
 clock conversion, and use of the same detector with independent P75 estimation.
 A synthetic Step 10 smoke run also completes with inference/ROI fixtures.
@@ -99,3 +102,40 @@ remain unverified here. ffmpeg and ffprobe are required for the repaired decoder
 The previous Run's 102.56 min includes both gaze models, both calibrations and a
 full blink pass; no reliable per-stage timing profile was available. No fixed
 runtime improvement is claimed for this correction.
+
+
+## Additional branch-audit fixes
+
+- Only original-size frames enter production; non-none preprocessing is rejected.
+- Calibration failure exits nonzero. The orchestrator also validates output metadata,
+  columns, frame uniqueness and finite calibrated gaze immediately after calibration.
+- PTGaze comparison mode requires synchronized input; no unsynchronized fallback.
+- Explicit calibration PKL selection overrides other files in the Run.
+- All-invalid calibration inputs fail explicitly instead of reducing an empty array.
+- Both PDFs use the same configured EyeLink geometry, invalid sample treatment,
+  trial duration and full-frame blink support. ROI extraction failures are fatal.
+- Accurate ROI decoding uses the first video stream and absolute PTS seeking.
+- Blink range warm-up uses sequential skipping; premature decode EOF is fatal.
+- Explicit image cache copying checks FPS, calibration mode and other step criteria.
+  Synchronization/comparison cache criteria include selected methods.
+- The CLI locates scripts from its own directory.
+- The integrated EyeLink stage requires mode 2 and validates required custom PKLs
+  before creating a Run. Standalone helper scripts remain available.
+- Runtime preflight imports numerical/PDF dependencies, decodes an actual frame,
+  initializes requested models and calls inference once before expensive stages.
+  This catches setup failures; it cannot certify tracking accuracy over a whole video.
+
+From the local Skripte directory, before a new beo7 run:
+
+```bash
+python -m shared.pipeline_preflight --video /Volumes/Empra9/Videos_60/beo7.mp4 --methods both
+```
+
+The master pipeline invokes this preflight automatically too. No skip flag is provided.
+Here OpenCV, MediaPipe, librosa and participant video/model assets are unavailable.
+Therefore the real inference preflight and full beo7 run remain unverified. The
+Step 10 smoke test uses synthetic inference, ASC and ROI fixtures, while fixation,
+EyeLink resampling, statistics and PDF rendering execute the production code.
+
+Step 10 also validates every calibrated frame against the shared video PTS clock
+before starting the full blink pass, so malformed/stale clocks fail cheaply.

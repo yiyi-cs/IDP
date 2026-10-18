@@ -694,7 +694,9 @@ class CalibrationManager:
         model_y = calibration_data.get('model_y')
         poly_transformer = calibration_data.get('poly_transformer')
 
-        valid_mask = pupil_corrected[x_col].notna() & pupil_corrected[y_col].notna()
+        valid_mask = np.isfinite(pupil_corrected[x_col]) & np.isfinite(pupil_corrected[y_col])
+        if not valid_mask.any():
+            return pupil_data, {'success': False, 'reason': 'no_valid_pupil_samples'}
         X = pupil_corrected.loc[valid_mask, [x_col, y_col]].values
         
         print(f"Eingabe (korrigierte Pupillen): X={X[:, 0].min():.1f}-{X[:, 0].max():.1f} px")
@@ -1081,3 +1083,4 @@ if __name__ == "__main__":
         print("FEHLER BEI KALIBRIERUNG")
         print(f"{'='*70}")
         print(f"\nGrund: {cal_info.get('reason', 'unknown')}")
+        raise SystemExit(1)

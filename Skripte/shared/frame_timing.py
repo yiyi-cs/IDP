@@ -50,7 +50,7 @@ def exact_frame_window(video, clock, start_frame, end_frame, width, height):
     count = end_frame-start_frame
     command = ['ffmpeg', '-v', 'error', '-seek_timestamp', '1',
         '-ss', f'{clock.at(start_frame)/1000:.9f}', '-i', str(video),
-        '-an', '-sn', '-dn', '-frames:v', str(count), '-fps_mode', 'passthrough',
+        '-map', '0:v:0', '-an', '-sn', '-dn', '-frames:v', str(count), '-fps_mode', 'passthrough',
         '-f', 'rawvideo', '-pix_fmt', 'bgr24', 'pipe:1']
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     size = int(width)*int(height)*3

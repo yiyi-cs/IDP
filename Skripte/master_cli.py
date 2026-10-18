@@ -76,7 +76,7 @@ from utils.calibration_mode_manager import CalibrationModes, list_available_mode
 
 # Pfade (ANPASSEN FÜR DEINE UMGEBUNG!)
 # BASE_FOLDER = Path(r"/Users/yiyi_mac/IDP_Code/Ergebnisse") # Ergebnisse
-SCRIPTS_FOLDER = Path(r"/Users/yiyi_mac/IDP_Code/Skripte") # Skripte
+SCRIPTS_FOLDER = _PROJECT_ROOT.resolve()
 
 # =================================================================================
 # HELPER-FUNKTIONEN

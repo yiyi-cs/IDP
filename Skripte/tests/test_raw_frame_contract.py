@@ -47,12 +47,16 @@ class RawFrameTests(unittest.TestCase):
             scanner = CrossRunCacheScanner(vp)
             filename = 'debug_5_ptgaze_calibrated.csv'
             (source / filename).write_text('frame\n1\n')
-            (target / 'config_used.json').write_text(json.dumps({'preprocess_mode': 'none', 'timebase_version': 'frame_pts_v1'}))
+            raw_config = {'preprocess_mode': 'none', 'timebase_version': 'frame_pts_v1',
+                          'video_fps': '60hz', 'calib_mode': 'FullCalib'}
+            (target / 'config_used.json').write_text(json.dumps(raw_config))
             for metadata in [{'preprocess_mode': 'lanczos_2x'}, {}]:
                 (source / 'config_used.json').write_text(json.dumps(metadata))
                 self.assertFalse(scanner.copy_step_outputs(source, target, 'debug_5_ptgaze'))
                 self.assertFalse((target / filename).exists())
-            (source / 'config_used.json').write_text(json.dumps({'preprocess_mode': 'none', 'timebase_version': 'frame_pts_v1'}))
+            (source / 'config_used.json').write_text(json.dumps(dict(raw_config, video_fps='25hz')))
+            self.assertFalse(scanner.copy_step_outputs(source, target, 'debug_5_ptgaze'))
+            (source / 'config_used.json').write_text(json.dumps(raw_config))
             self.assertTrue(scanner.copy_step_outputs(source, target, 'debug_5_ptgaze'))
 
     def test_eyelink_cache_is_independent_of_image_processing(self):

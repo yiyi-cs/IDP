@@ -13,8 +13,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from shared.frame_timing import TIMEBASE_VERSION, detector_input
-from blink.run_data import load_validated_gaze
+from shared.frame_timing import TIMEBASE_VERSION, detector_input, load_frame_clock, sync_offset
+from blink.run_data import load_validated_gaze, validate_gaze_clock
 from shared.shared_image_preprocessing import validate_preprocess_mode
 
 EXPECTED_OUTPUTS = (
@@ -46,6 +46,10 @@ def run_stage(run_dir, video, asc, vp, methods='both', preprocess_mode='none'):
     selected = list(filenames) if methods == 'both' else [methods]
     # Fail cheaply before rerunning blink inference if calibration is unsuitable.
     import pandas as pd
+    import numpy as np
+    clock = load_frame_clock(video, run)
+    reference = pd.Series(clock.times_ms)
+    offset = sync_offset(run)
     for method in selected:
         columns = pd.read_csv(run / filenames[method], nrows=0).columns
         required = {'frame', 'timestamp_ms_synced', 'phase_type', 'gaze_deg_x_calib'}
@@ -56,6 +60,10 @@ def run_stage(run_dir, video, asc, vp, methods='both', preprocess_mode='none'):
             raise ValueError(f'{method}: old frame/FPS timebase; regenerate or use diagnostic repair')
         if not {'trial_number', 'trial_assignment'}.intersection(columns):
             raise ValueError(f'{method}: missing trial assignment')
+        data = pd.read_csv(run / filenames[method])
+        validate_gaze_clock(data, reference, offset)
+        if not np.isfinite(pd.to_numeric(data['gaze_deg_x_calib'], errors='coerce')).any():
+            raise ValueError(f'{method}: no finite calibrated gaze samples')
     from blink.export_blink_filter_logs import export_blink_filter_logs
     from blink.extract_eyelink_blink_benchmark import process_one_asc
     export_blink_filter_logs(str(video), str(extra), ap_code=vp,

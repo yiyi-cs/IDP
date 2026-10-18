@@ -75,8 +75,8 @@ def nearest_row(q, target_abs_ms):
 def extract_frame_at_pts(video: Path, pts_s: float):
     """Decode one frame at a real video timestamp; avoids OpenCV frame-index seek on VFR."""
     cmd=[
-        "ffmpeg","-v","error","-ss",f"{max(0.0,pts_s):.6f}",
-        "-i",str(video),"-frames:v","1","-f","image2pipe","-vcodec","png","-"
+        "ffmpeg","-v","error","-seek_timestamp","1","-ss",f"{max(0.0,pts_s):.9f}",
+        "-i",str(video),"-map","0:v:0","-frames:v","1","-f","image2pipe","-vcodec","png","-"
     ]
     r=subprocess.run(cmd,capture_output=True)
     if r.returncode!=0 or not r.stdout:return None
@@ -96,6 +96,8 @@ def eye_roi(mesh,frame):
     lp=np.array([[lm.landmark[i].x*w,lm.landmark[i].y*h] for i in LEFT])
     rp=np.array([[lm.landmark[i].x*w,lm.landmark[i].y*h] for i in RIGHT])
     p=np.vstack([lp,rp]); x0=max(0,int(p[:,0].min()-55));x1=min(w,int(p[:,0].max()+55));y0=max(0,int(p[:,1].min()-45));y1=min(h,int(p[:,1].max()+45))
+    if x1 <= x0 or y1 <= y0:
+        return rgb,None
     crop=rgb[y0:y1,x0:x1].copy()
     for pts in (lp,rp):
         for k,(x,y) in enumerate(pts):

@@ -11,6 +11,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from blink.run_pipeline_extras import run_stage
 from blink import diagnostic_support
+from shared.frame_timing import FrameClock
 import argparse
 parser=argparse.ArgumentParser(description='Synthetic integration smoke test; inference and ROIs are fixtures')
 parser.add_argument('--output-dir',type=Path,required=True)
@@ -59,6 +60,7 @@ class Mesh:
 fake_mp=types.SimpleNamespace(solutions=types.SimpleNamespace(face_mesh=types.SimpleNamespace(FaceMesh=Mesh)))
 with patch.dict(sys.modules, {'blink.export_blink_filter_logs':exporter,
         'blink.extract_eyelink_blink_benchmark':benchmark_module,'mediapipe':fake_mp}), \
+     patch('blink.run_pipeline_extras.load_frame_clock',return_value=FrameClock(t+90000)), \
      patch.object(diagnostic_support,'extract_frame_at_pts',return_value=np.full((120,240,3),180,dtype=np.uint8)), \
      patch.object(diagnostic_support,'eye_roi',side_effect=lambda mesh,im:(im,None)):
     run_stage(root,video,asc,'synthetic',methods='both')

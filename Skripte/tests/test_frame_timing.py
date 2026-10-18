@@ -31,6 +31,30 @@ def setup_run(run):
 
 class FrameTimingTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'ffmpeg/ffprobe unavailable')
+    def test_h264_bframes_vfr_and_nonzero_pts_match_sequential_decode(self):
+        encoders = subprocess.run(['ffmpeg', '-v', 'error', '-encoders'], capture_output=True, text=True, check=True).stdout
+        if 'libx264' not in encoders:
+            self.skipTest('libx264 unavailable')
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            for offset in [0, 3]:
+                video = run / f'h264_{offset}.mp4'
+                subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                    'testsrc=size=64x64:rate=25:duration=1', '-vf', f'setpts=N*N/(100*TB)+{offset}/TB',
+                    '-fps_mode', 'vfr', '-c:v', 'libx264', '-bf', '3', '-g', '10',
+                    '-pix_fmt', 'yuv420p', str(video)], check=True)
+                clock = load_frame_clock(video, run)
+                n = len(clock.times_ms)
+                self.assertEqual(clock.times_ms[0], offset*1000)
+                self.assertGreater(len(np.unique(np.diff(clock.times_ms))), 1)
+                full = list(exact_frame_window(video, clock, 0, n, 64, 64))
+                for start, end in [(1,2), (3,9), (12,20), (n-1,n)]:
+                    selected = list(exact_frame_window(video, clock, start, end, 64, 64))
+                    self.assertEqual([i for i,_ in selected], list(range(start,end)))
+                    for (_, actual), (_, expected) in zip(selected, full[start:end]):
+                        np.testing.assert_array_equal(actual, expected)
+
+    @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'ffmpeg/ffprobe unavailable')
     def test_real_vfr_seek_pixels_match_full_sequential_decode(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)

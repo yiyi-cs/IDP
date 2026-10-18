@@ -373,6 +373,13 @@ class CrossRunCacheScanner:
                     or target_config.get('timebase_version') != TIMEBASE_VERSION):
                 print(f"      [CACHE REJECTED] {step}: raw-frame and presentation-time provenance required")
                 return False
+            for key in CACHE_CRITERIA[step]:
+                if key not in source_config or key not in target_config or source_config[key] != target_config[key]:
+                    print(f"      [CACHE REJECTED] {step}: incompatible or missing {key}")
+                    return False
+            if source_config.get('diagnostic_only'):
+                print(f"      [CACHE REJECTED] {step}: diagnostic copy")
+                return False
 
         filenames = self.output_mapping[step]
         copied_count = 0
@@ -551,8 +558,17 @@ class AnalysisPipeline:
             (success, error_message) - success=False wenn VP uebersprungen werden soll
         """
         
+        if config.analysis_mode != 2:
+            return False, 'Integrated blink/EyeLink pipeline requires comparison mode 2'
+        if config.methods not in ('both', 'mediapipe', 'ptgaze'):
+            return False, f'Unknown gaze methods: {config.methods}'
+        if (not config.create_calibration and config.methods in ('ptgaze', 'both')
+                and config.calibration_ptgaze_pkl_path is None):
+            return False, 'Custom PTGaze calibration PKL is required for the selected methods'
         for calibration in [config.calibration_pkl_path, config.calibration_ptgaze_pkl_path]:
             if calibration is not None:
+                if not Path(calibration).is_file():
+                    return False, f'Calibration PKL missing: {calibration}'
                 provenance = Path(calibration).parent / 'config_used.json'
                 if not provenance.exists():
                     return False, "Custom calibration needs verified raw-frame / frame_pts_v1 provenance"
@@ -593,6 +609,16 @@ class AnalysisPipeline:
             if not Path(config.calibration_pkl_path).exists():
                 return False, f"Kalibrierungs-PKL existiert nicht: {config.calibration_pkl_path}"
         
+        try:
+            result = subprocess.run([sys.executable,
+                str(self.scripts_folder / 'shared' / 'pipeline_preflight.py'),
+                '--video', str(video_path), '--methods', config.methods],
+                cwd=self.scripts_folder, env=self._create_base_env(config, self.vp_data.vp_folder),
+                timeout=180)
+            if result.returncode != 0:
+                return False, f'Runtime preflight failed (exit {result.returncode}); see error above'
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, f'Runtime preflight failed: {exc}'
         return True, None
 
     def run_full_analysis(self, config: RunConfiguration) -> RunResult:
@@ -1258,6 +1284,33 @@ class AnalysisPipeline:
         except Exception as e:
             return False, str(e)
     
+    @staticmethod
+    def _check_calibration_output(output_dir: Path, method: str) -> tuple:
+        """A zero exit code alone does not establish usable calibrated output."""
+        import pandas as pd
+        import numpy as np
+        stem = 'ptgaze' if method == 'ptgaze' else 'pupil_data'
+        info_name = 'ptgaze_calibration_info' if method == 'ptgaze' else 'calibration_info'
+        try:
+            info = json.loads((output_dir / f'debug_5_{info_name}.json').read_text())
+            if info.get('success') is not True:
+                raise ValueError('Calibration metadata does not report success')
+            data = pd.read_csv(output_dir / f'debug_5_{stem}_calibrated.csv')
+            required = {'frame', 'timestamp_ms_synced', 'timestamp_source', 'gaze_deg_x_calib'}
+            if data.empty or not required.issubset(data):
+                raise ValueError('Missing synchronized calibrated rows or columns')
+            if data['frame'].isna().any() or data['frame'].duplicated().any():
+                raise ValueError('Duplicate or null calibrated frame IDs')
+            if not data['timestamp_source'].eq(TIMEBASE_VERSION).all():
+                raise ValueError('Obsolete calibrated frame clock')
+            if not np.isfinite(data['timestamp_ms_synced']).all():
+                raise ValueError('Invalid synchronized timestamps')
+            if not np.isfinite(pd.to_numeric(data['gaze_deg_x_calib'], errors='coerce')).any():
+                raise ValueError('No finite calibrated gaze samples')
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return False, f'Invalid {method} calibration output: {exc}'
+        return True, 'OK'
+
     def _run_debug_5_mediapipe(self, config: RunConfiguration, output_dir: Path, calib_pkl: Path) -> tuple:
         """Fuehrt debug_5_partial_calibration.py (MediaPipe) aus."""
         
@@ -1276,7 +1329,9 @@ class AnalysisPipeline:
                 timeout=120
             )
             
-            return (True, "OK") if result.returncode == 0 else (False, f"Exit {result.returncode}")
+            if result.returncode != 0:
+                return False, f"Exit {result.returncode}"
+            return self._check_calibration_output(output_dir, 'mediapipe')
         except subprocess.TimeoutExpired:
             return False, "Timeout (120s)"
         except Exception as e:
@@ -1300,7 +1355,9 @@ class AnalysisPipeline:
                 timeout=120
             )
             
-            return (True, "OK") if result.returncode == 0 else (False, f"Exit {result.returncode}")
+            if result.returncode != 0:
+                return False, f"Exit {result.returncode}"
+            return self._check_calibration_output(output_dir, 'ptgaze')
         except subprocess.TimeoutExpired:
             return False, "Timeout (120s)"
         except Exception as e:

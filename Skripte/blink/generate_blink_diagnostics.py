@@ -1,8 +1,4 @@
-"""Enhanced Blink Diagnostics (stage 1).
-
-Place in IDP_Code/blink_extra/ alongside generate_blink_diagnostics.py.
-Reads existing 60-Hz analysis outputs; does not recompute blink or gaze.
-"""
+"""Render current-Run blink decisions and synchronized gaze without recomputing them."""
 from __future__ import annotations
 
 import argparse
@@ -18,6 +14,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Patch
 
 from blink import diagnostic_support as old
+from fixation.eyelink_sanity import pixels_to_degrees
 
 # Same webcam region styling in panels 1 and 2.
 WEBCAM = "#3478A8"
@@ -30,11 +27,13 @@ def _read_gaze(path: Path, zero_ms: float, *, eyelink: bool = False) -> pd.DataF
         raise FileNotFoundError(path)
     df = pd.read_csv(path)
     if eyelink:
-        # Match plot_blink_visualization.py's EyeLink screen geometry.
         time = pd.to_numeric(df["timestamp_ms"], errors="coerce")
         x = pd.to_numeric(df["x_pos"], errors="coerce")
-        x_cm = (x - (1920.0-1.0)/2.0) * (53.2/1920.0)
-        deg = np.degrees(np.arctan2(x_cm, 70.0))
+        valid = np.isfinite(x) & (x > 0)
+        for column in ['y_pos', 'pupil_size']:
+            if column in df:
+                valid &= pd.to_numeric(df[column], errors='coerce').gt(0)
+        deg = pixels_to_degrees(x.where(valid))
     else:
         time = pd.to_numeric(df["timestamp_ms_synced"], errors="coerce")
         deg = pd.to_numeric(df["gaze_deg_x_calib"], errors="coerce")
@@ -79,12 +78,12 @@ def _reps(q, pred, truth, start):
     return categories
 
 
-def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze,include_rois=True,diagnostic_only=False):
+def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze,include_rois=True,diagnostic_only=False,trial_duration_s=None):
     fig = plt.figure(figsize=(16.5,17.8))
     outer=fig.add_gridspec(6,1,height_ratios=[1.8,1.25,1.0,.20,3.6,.06],hspace=.43)
     a=fig.add_subplot(outer[0])
     for label,data in method_gaze.items():
-        shown=data[(data.t>=0)&(data.t<=10)]
+        shown=data[data.t>=0]
         a.plot(shown.t,shown.x, color=GAZE[label],lw=.85,
                alpha=.90 if label!="EyeLink" else .75,label=label,zorder=3)
     for start,end,*_ in pred:
@@ -127,6 +126,7 @@ def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze,include_rois=True,
 
     title=fig.add_subplot(outer[3]);title.axis("off")
     title.text(0,.5,"4. Eye ROIs — first 4 events by time within each category",fontsize=11,weight="bold")
+    title.text(0,-.08,"ROI categories: EyeLink midpoint inside webcam interval; statistics use 100 ms matching tolerance.",fontsize=8)
     sg=outer[4].subgridspec(3,4,wspace=.16,hspace=.56)
     mesh = None
     if include_rois:
@@ -148,8 +148,10 @@ def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze,include_rois=True,
                 continue
             im=old.extract_frame_at_pts(video,pts_s)
             if im is None:
-                ax.text(.5,.5,"Frame unavailable",ha="center",va="center",transform=ax.transAxes)
-                continue
+                if mesh is not None:
+                    mesh.close()
+                plt.close(fig)
+                raise RuntimeError(f'ROI extraction failed: trial {tr}, frame {frame}, PTS {pts_s}')
             crop,points=old.eye_roi(mesh,im)
             ax.imshow(crop)
             label=f"{category} | t={t:.2f}s | frame {frame}\n{selection}: L={le:.3f} R={re:.3f}"
@@ -158,7 +160,7 @@ def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze,include_rois=True,
                           EYELINK if category=="EYELINK ONLY" else "#38634A")
     if mesh is not None:
         mesh.close()
-    xmax=max(9.5,float(q.rel_s.max()) if len(q) else 9.5)
+    xmax = trial_duration_s if trial_duration_s is not None else (float(q.rel_s.max()) if len(q) else 1.)
     for ax in (a,b,c):ax.set_xlim(0,xmax)
     fig.suptitle(f"{vp} — Trial {tr} — Blink diagnostic (synchronized timing)",weight="bold",fontsize=15,y=.993)
     fig.subplots_adjust(top=.962,left=.075,right=.985,bottom=.035)
@@ -208,6 +210,7 @@ def render_run(run_dir, video, vp, method='ptgaze', include_rois=True):
                     method_gaze[label] = _read_gaze(run / name, start)
             method_gaze['EyeLink'] = _read_gaze(run / 'debug_3_eyetracker_data.csv', start, eyelink=True)
             reps = _reps(q, pred, truth, start)
-            _trial_page(pdf, vp, tr.trial_number, q, pred, truth, reps, video, method_gaze, include_rois, diagnostic_only)
+            _trial_page(pdf, vp, tr.trial_number, q, pred, truth, reps, video, method_gaze,
+                        include_rois, diagnostic_only, trial_duration_s=(end-start)/1000.)
     save_statistics(extra, vp, metrics, records)
     return pdf_path

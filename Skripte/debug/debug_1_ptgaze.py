@@ -195,6 +195,8 @@ class PtgazeGazeAnalyzer:
         print("PTGAZE GAZE ANALYZER")
         print(f"{'='*70}")
         
+        # Also support importing this analyzer outside its CLI entry point.
+        import torch
         # Initialisiere Detector
         self.detector = PtgazeGazeDetector(
             video_width=video_width,

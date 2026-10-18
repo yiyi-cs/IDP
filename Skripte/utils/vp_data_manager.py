@@ -219,10 +219,10 @@ CACHE_CRITERIA = {
     'offline_calibration': ['video_fps', 'calib_mode', 'preprocess_mode'],
     'offline_calibration_ptgaze': ['video_fps', 'calib_mode', 'preprocess_mode'],
     'debug_3': [],
-    'debug_4': ['video_fps', 'preprocess_mode'],
+    'debug_4': ['video_fps', 'preprocess_mode', 'methods'],
     'debug_5_mediapipe': ['video_fps', 'calib_mode', 'preprocess_mode'],
     'debug_5_ptgaze': ['video_fps', 'calib_mode', 'preprocess_mode'],
-    'debug_6': ['video_fps', 'calib_mode', 'analysis_mode', 'preprocess_mode'],
+    'debug_6': ['video_fps', 'calib_mode', 'analysis_mode', 'preprocess_mode', 'methods'],
 }
 
 # Mapping: Step -> erwartete Output-Dateien

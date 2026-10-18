@@ -95,44 +95,20 @@ def load_trials(phases_json: Path, include_practice: bool = False) -> List[Trial
 
 def load_blink_intervals(frame_log_csv: Path, trials: List[TrialInfo],
                          pt_df: pd.DataFrame) -> Dict[int, List[Tuple[float, float]]]:
-    """Return invalid-eye intervals in trial-relative *EyeLink synchronized* ms.
-
-    Match video frame numbers to PTGaze frames first. Never subtract raw PTS
-    from a phase's video timestamp: the clocks can have different offsets.
-    """
-    log = pd.read_csv(frame_log_csv)
-    if not {'frame_number', 'valid_eye_frame'}.issubset(log.columns):
-        raise ValueError("Blink frame log needs frame_number and valid_eye_frame")
-    if 'frame' not in pt_df.columns:
-        raise ValueError("PTGaze file needs frame for exact blink-log join")
-    pt_small = pt_df[['frame', 'trial_number', 'timestamp_ms_synced']].copy()
-    joined = pt_small.merge(log[['frame_number', 'valid_eye_frame']],
-                            left_on='frame', right_on='frame_number', how='left',
-                            validate='one_to_one')
-    if joined['valid_eye_frame'].isna().any():
-        raise ValueError("Some PTGaze frames have no matching blink validity entry")
-    trial_by_id = {t.trial_number: t for t in trials}
-    out = {t.trial_number: [] for t in trials}
-    for trial_number, group in joined.groupby('trial_number', sort=False):
-        if pd.isna(trial_number) or int(trial_number) not in trial_by_id:
-            continue
-        tr = trial_by_id[int(trial_number)]
-        group = group.sort_values('timestamp_ms_synced').reset_index(drop=True)
-        time = group['timestamp_ms_synced'].to_numpy(float)
-        from blink.run_data import boolean_mask
-        invalid = ~boolean_mask(group['valid_eye_frame']).to_numpy()
-        ids = np.flatnonzero(invalid)
-        if not len(ids):
-            continue
-        runs = np.split(ids, np.flatnonzero(np.diff(ids) > 1) + 1)
-        for r in runs:
-            # Boundaries at sample midpoints, giving the shaded intervals
-            # a meaningful width while retaining the detector's clock.
-            i, j = int(r[0]), int(r[-1])
-            left = (time[i-1] + time[i])/2 if i > 0 else time[i]
-            right = (time[j] + time[j+1])/2 if j+1 < len(time) else time[j]
-            out[tr.trial_number].append(
-                (left - tr.trial_start_eye_ms, right - tr.trial_start_eye_ms))
+    """Use the same complete frame support as the blink diagnostic PDF."""
+    from shared.frame_timing import synchronized_frame_log
+    from blink.run_data import boolean_mask
+    log = synchronized_frame_log(pd.read_csv(frame_log_csv), frame_log_csv.parent.parent)
+    out = {}
+    for tr in trials:
+        q = log[log['timestamp_ms_synced'].between(
+            tr.trial_start_eye_ms, tr.trial_end_eye_ms, inclusive='left')].copy()
+        invalid = q[~boolean_mask(q['valid_eye_frame'])]
+        groups = invalid['frame_number'].diff().ne(1).cumsum()
+        out[tr.trial_number] = [
+            (float(g['timestamp_ms_synced'].min()) - tr.trial_start_eye_ms,
+             min(float(g['sample_end_ms'].max()), tr.trial_end_eye_ms) - tr.trial_start_eye_ms)
+            for _, g in invalid.groupby(groups, sort=False)]
     return out
 
 
@@ -162,6 +138,11 @@ def load_eyelink_gaze(eye_csv: Path) -> pd.DataFrame:
     q = df.copy()
     q['timestamp_ms'] = pd.to_numeric(q['timestamp_ms'], errors='coerce')
     q['x_pos'] = pd.to_numeric(q['x_pos'], errors='coerce')
+    valid = np.isfinite(q['x_pos']) & q['x_pos'].gt(0)
+    for column in ['y_pos', 'pupil_size']:
+        if column in q:
+            valid &= pd.to_numeric(q[column], errors='coerce').gt(0)
+    q.loc[~valid, 'x_pos'] = np.nan
     return q
 
 
