@@ -602,7 +602,7 @@ class RobustPupilDetector:
         if min_confidence is None:
             min_confidence = MIN_CONFIDENCE
 
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             return {'success': False, 'error': 'Video nicht öffenbar'}
 
@@ -912,7 +912,7 @@ class DetailedPupilDebugger:
             DataFrame mit ~70 Spalten (alle Verarbeitungsebenen)
         """
         
-        self.cap = cv2.VideoCapture(self.video_path)
+        self.cap = cv2.VideoCapture(str(self.video_path))
         if not self.cap.isOpened():
             return None
         

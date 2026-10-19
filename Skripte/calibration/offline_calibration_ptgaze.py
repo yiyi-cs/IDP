@@ -315,7 +315,7 @@ class OfflinePtgazeCalibration:
             video_path_for_size = os.environ['PIPELINE_MAIN_VIDEO_PATH']
 
         if video_path_for_size:
-            cap = cv2.VideoCapture(video_path_for_size)
+            cap = cv2.VideoCapture(str(video_path_for_size))
             video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             cap.release()
@@ -365,7 +365,7 @@ class OfflinePtgazeCalibration:
         """Oeffnet Video EINMAL und cached es (Performance)"""
         
         if video_path not in self._video_cache:
-            cap = cv2.VideoCapture(video_path)
+            cap = cv2.VideoCapture(str(video_path))
             
             if not cap.isOpened():
                 print(f"    [X] Kann Video nicht oeffnen: {Path(video_path).name}")

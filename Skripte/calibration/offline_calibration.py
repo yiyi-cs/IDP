@@ -413,7 +413,7 @@ class OfflineVideoCalibration:
         """
         
         if video_path not in self._video_cache:
-            cap = cv2.VideoCapture(video_path)
+            cap = cv2.VideoCapture(str(video_path))
             
             if not cap.isOpened():
                 print(f"    Kann Video nicht öffnen: {Path(video_path).name}")

@@ -182,7 +182,7 @@ class PupilDetector:
             print(f"    Video-Pfad aus JSON nicht gefunden, nutze Parameter: {Path(video_path).name}")
         
         # Öffne Video
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             print("    Video konnte nicht geöffnet werden!")
             return None
@@ -269,7 +269,7 @@ class PupilDetector:
         # HIER KOMMT DER BISHERIGE CODE aus process_video()
         # ═══════════════════════════════════════════════════════════════
         
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             print(" Video konnte nicht geöffnet werden!")
             return None

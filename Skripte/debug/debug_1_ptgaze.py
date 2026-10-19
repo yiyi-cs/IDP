@@ -287,7 +287,7 @@ class PtgazeGazeAnalyzer:
             print(f"    Video-Pfad aus JSON nicht gefunden, nutze Parameter: {Path(video_path).name}")
         
         # Oeffne Video
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             print("    [X] Video konnte nicht geoeffnet werden!")
             return None
@@ -371,7 +371,7 @@ class PtgazeGazeAnalyzer:
         - Multi-Video Modus (block1/block2)
         """
         
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             print("[X] Video konnte nicht geoeffnet werden!")
             return None
@@ -771,7 +771,7 @@ if __name__ == "__main__":
             print(f"   Erwarte: *_block1.mp4 und *_block2.mp4")
             exit(1)
             
-        cap = cv2.VideoCapture(video_path_block1)
+        cap = cv2.VideoCapture(str(video_path_block1))
         video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
@@ -793,7 +793,7 @@ if __name__ == "__main__":
             print(f"\n[X] Video nicht gefunden: {VIDEO_PATH}")
             exit(1)
             
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(str(video_path))
         video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
