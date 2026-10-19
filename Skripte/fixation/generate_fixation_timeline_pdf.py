@@ -296,8 +296,9 @@ def render_run(run_dir, vp, method="ptgaze", trial_numbers=None):
                     if legend:
                         for text in legend.get_texts():
                             text.set_text(text.get_text().replace('PTGaze', 'MediaPipe'))
+            fig.subplots_adjust(bottom=.11)
+            fig.text(.08, .035, 'Shared timebase; absolute audio/video latency has not been independently verified.', fontsize=8, color='#775500')
             if diagnostic_only:
-                fig.subplots_adjust(bottom=.11)
                 fig.text(.08, .012, 'Temporal diagnostic only: legacy model outputs; not a raw-frame acceptance result.', fontsize=8, color='#9B4700')
             pdf.savefig(fig, bbox_inches='tight')
             plt.close(fig)

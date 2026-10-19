@@ -162,8 +162,9 @@ def _trial_page(pdf,vp,tr,q,pred,truth,reps,video,method_gaze,include_rois=True,
         mesh.close()
     xmax = trial_duration_s if trial_duration_s is not None else (float(q.rel_s.max()) if len(q) else 1.)
     for ax in (a,b,c):ax.set_xlim(0,xmax)
-    fig.suptitle(f"{vp} — Trial {tr} — Blink diagnostic (synchronized timing)",weight="bold",fontsize=15,y=.993)
+    fig.suptitle(f"{vp} — Trial {tr} — Blink diagnostic (shared timebase)",weight="bold",fontsize=15,y=.993)
     fig.subplots_adjust(top=.962,left=.075,right=.985,bottom=.035)
+    fig.text(.075, .024, 'Shared timebase; absolute audio/video latency has not been independently verified.', fontsize=8, color='#775500')
     if diagnostic_only:
         fig.text(.075, .012, 'Blink clock diagnostic only: legacy gaze shown unchanged; frame IDs unverified; fresh inference required.',
                  fontsize=9, color='#9B4700')

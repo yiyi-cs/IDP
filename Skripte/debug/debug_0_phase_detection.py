@@ -54,6 +54,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 # =================================================================================
 
 import numpy as np
+from shared.audio_sync import refine_880_centers, summarize_anchor_offsets
 import pandas as pd
 import librosa
 import json
@@ -442,6 +443,7 @@ class SyncResult:
     offset_trials_ms: Optional[float] = None        # Offset für Trials (440/880 Hz)
     std_calibration_ms: float = 0.0
     std_trials_ms: float = 0.0
+    quality: Dict = field(default_factory=dict)
 
 class CompatMultiAnchorResult:
     """
@@ -453,7 +455,9 @@ class CompatMultiAnchorResult:
     def __init__(self, sync_result: SyncResult):
         self.method = sync_result.method
         self.n_anchors = sync_result.n_anchors
-        self.drift_ms = sync_result.std_ms
+        self.anchor_std_ms = sync_result.std_ms
+        self.drift_ms = float("nan")  # No drift regression is performed.
+        self.quality = sync_result.quality
         self.slope = 1.0
         self.outliers = []
         self.anchors = []
@@ -467,8 +471,9 @@ class CompatMultiAnchorResult:
         
         # Für alte Dual-Anchor Kompatibilität
         self.offset_1760hz_ms = sync_result.offset_calibration_ms if sync_result.offset_calibration_ms is not None else self.offset_ms
-        self.offset_440hz_ms = self.offset_ms
-        self.offset_880hz_ms = self.offset_ms
+        families = self.quality.get("frequency_families", {})
+        self.offset_440hz_ms = families.get("440", {}).get("median_offset_ms")
+        self.offset_880hz_ms = families.get("880", {}).get("median_offset_ms")
         
         # Frequenz-Differenz (für QC)
         if sync_result.offset_calibration_ms is not None and sync_result.offset_trials_ms is not None:
@@ -477,13 +482,16 @@ class CompatMultiAnchorResult:
             self.frequency_difference_ms = 0.0
         
         self.chosen_trial_offset_ms = self.offset_ms
-        self.chosen_trial_frequency = 440
-        self.marker_choice_reason = "Separate Offsets für Kalibrierung und Trials"
+        selected = self.quality.get("selected_trial_frequencies", [])
+        self.chosen_trial_frequency = "/".join(map(str, selected)) or "unverified"
+        self.marker_choice_reason = self.quality.get("selection_reason", "unverified")
         
         # Qualitäts-Metriken
-        self.r_squared = 0.99 if sync_result.std_ms < 50 else 0.95 if sync_result.std_ms < 100 else 0.90
-        self.r_squared_1760hz = 0.99 if sync_result.std_calibration_ms < 50 else 0.95
-        self.r_squared_440hz = self.r_squared
+        # No fitted regression: never manufacture R² from anchor dispersion.
+        self.confidence = 0.95 if sync_result.std_ms < 50 else 0.85
+        self.r_squared = float("nan")
+        self.r_squared_1760hz = float("nan")
+        self.r_squared_440hz = float("nan")
         
         # Anchor-Zählungen
         self.n_anchors_1760hz = sum(1 for f in sync_result.anchor_frequencies if f == FREQ_CALIBRATION)
@@ -646,8 +654,11 @@ def calculate_sync_offset(detected_anchors: List[Dict],
         offset_calibration = None
         std_calibration = 0
     
-    # Trial-Offset (440 Hz + 880 Hz kombiniert)
-    offsets_trials = offsets_440 + offsets_880
+    quality = summarize_anchor_offsets(all_offsets, all_frequencies)
+    selected_frequencies = quality["selected_trial_frequencies"]
+    # Pool only compatible trial marker families.
+    offsets_trials = [o for o, f in zip(all_offsets, all_frequencies)
+                      if f in selected_frequencies]
     if len(offsets_trials) > 0:
         offset_trials = np.median(offsets_trials)
         std_trials = np.std(offsets_trials) if len(offsets_trials) > 1 else 0
@@ -683,6 +694,9 @@ def calculate_sync_offset(detected_anchors: List[Dict],
         print(f"\n           ► Differenz Trials - Kalibrierung: {diff:+.1f} ms")
         print(f"             (Unterschiedliche Audio-Latenz erwartet!)")
     
+    print(f"           [QC] Trial marker selection: {quality['selection_reason']}")
+    print("           [QC] Absolute A/V latency unverified; drift not fitted")
+
     # Erstelle SyncResult mit BEIDEN Offsets
     result = SyncResult(
         offset_ms=offset_trials if offset_trials is not None else final_offset,
@@ -691,15 +705,15 @@ def calculate_sync_offset(detected_anchors: List[Dict],
         std_ms=std_trials if offset_trials is not None else std_offset,
         estimated_latency_ms=estimated_latency_ms,
         anchor_offsets=all_offsets,
-        anchor_frequencies=all_frequencies
+        anchor_frequencies=all_frequencies,
+        quality=quality
     )
     
     # Speichere separate Offsets als zusätzliche Attribute
     result.offset_calibration_ms = offset_calibration
     result.offset_trials_ms = offset_trials
     result.std_calibration_ms = std_calibration
-    result.std_calibration_ms = std_calibration
-    result.std_trials_ms = std_trials if std_trials > 0 else std_calibration
+    result.std_trials_ms = std_trials
     
     # Bei beschädigtem Audio (keine Trial-Anchors): Schätze Trial-Offset aus Kalibrierung
     if offset_trials is None and offset_calibration is not None:
@@ -707,6 +721,8 @@ def calculate_sync_offset(detected_anchors: List[Dict],
         ESTIMATED_CALIB_TRIAL_DIFF_MS = 600  # Konservative Schätzung
         result.offset_trials_ms = offset_calibration + ESTIMATED_CALIB_TRIAL_DIFF_MS
         result.offset_ms = result.offset_trials_ms
+        result.quality["warnings"].append("trial_offset_estimated_as_calibration_plus_600ms")
+        result.quality["selection_reason"] = "legacy_calibration_plus_600ms_estimate"
         print(f"\n           [!] Keine Trial-Anchors >> Schätze Trial-Offset: {result.offset_trials_ms:.0f} ms")
         print(f"               (Kalibrierung + {ESTIMATED_CALIB_TRIAL_DIFF_MS} ms)")
     
@@ -823,6 +839,8 @@ class FrequencyDetector:
                              prominence=prominence)
         
         timestamps = peaks / sr
+        if target_freq == FREQ_TRIAL_END:
+            timestamps = np.asarray(refine_880_centers(audio, sr, timestamps))
         
         # ──────────────────────────────────────────────────────────────
         # SCHRITT 5: Clustering (aus debug_2)
@@ -873,7 +891,7 @@ class FrequencyDetector:
             window_s: Toleranz (±5s)
         
         Returns:
-            Liste von besten Matches (nimmt Audio wenn gefunden, sonst JSON)
+            Liste beobachteter Audio-Matches; keine erfundenen JSON-Detektionen
         """
         
         matched = []
@@ -886,9 +904,8 @@ class FrequencyDetector:
                 # Nimm nächste
                 best_match = min(candidates, key=lambda d: abs(d - exp_time))
                 matched.append(best_match)
-            else:
-                # Keine Detektion >> Nutze JSON-Vorhersage
-                matched.append(exp_time)
+            # A prediction is not an observed audio marker. Missing matches
+            # stay missing so callers can explicitly mark JSON-only fallback.
         
         return matched
 
@@ -1521,7 +1538,10 @@ class PhaseReconstructor:
                     self.offset_ms = offset
                     self.slope = 1.0
                     self.n_anchors = 0
-                    self.drift_ms = 0
+                    self.drift_ms = float("nan")
+                    self.anchor_std_ms = 0.0
+                    self.quality = summarize_anchor_offsets([], [])
+                    self.confidence = 0.85
                     
                     # Dual-Anchor Kompatibilität
                     self.offset_1760hz_ms = offset
@@ -1533,9 +1553,9 @@ class PhaseReconstructor:
                     self.marker_choice_reason = "Initial offset (vor Multi-Anchor)"
                     
                     # Qualitäts-Metriken (für Statistik-Plot!)
-                    self.r_squared = 0.85  # Default für Initial-Offset
-                    self.r_squared_1760hz = 0.85
-                    self.r_squared_440hz = 0.85
+                    self.r_squared = float("nan")
+                    self.r_squared_1760hz = float("nan")
+                    self.r_squared_440hz = float("nan")
                     
                     # Listen (für Visualisierung)
                     self.outliers = []
@@ -1806,7 +1826,9 @@ class PhaseReconstructor:
             'anchor_video_time_s': sync_point_video_s,
             'anchor_eyelink_time_ms': sync_point_eyelink_ms,
             'offset_ms': offset_ms,  # Gemischter Offset (Kompatibilität)
-            'confidence': min(0.95, multi_anchor_result.r_squared) if multi_anchor_result else 0.85,
+            'confidence': (getattr(multi_anchor_result, 'confidence', 0.85)
+                           if multi_anchor_result else 0.85),
+            'confidence_basis': 'legacy_score_only_not_absolute_sync_validation',
             'n_events': len(events)
         }
 
@@ -1821,14 +1843,16 @@ class PhaseReconstructor:
         if multi_anchor_result:
             sync_info.update({
                 'slope': multi_anchor_result.slope,
-                'r_squared': multi_anchor_result.r_squared,
-                'drift_ms': multi_anchor_result.drift_ms,
+                'r_squared': multi_anchor_result.r_squared if np.isfinite(multi_anchor_result.r_squared) else None,
+                'drift_ms': multi_anchor_result.drift_ms if np.isfinite(multi_anchor_result.drift_ms) else None,
+                'anchor_std_ms': getattr(multi_anchor_result, 'anchor_std_ms', None),
+                'quality': getattr(multi_anchor_result, 'quality', {}),
                 'n_anchors': multi_anchor_result.n_anchors,
                 'n_outliers': len(multi_anchor_result.outliers)
             })
             
             #  NEU v2.2: Dual-Anchor-Offsets exportieren!
-            if multi_anchor_result.method if multi_anchor_result is not None else 'initial' == 'dual_anchor':
+            if multi_anchor_result is not None:
                 sync_info.update({
                     'offset_1760hz_ms': multi_anchor_result.offset_1760hz_ms if multi_anchor_result is not None else offset_ms,
                     'offset_440hz_ms': multi_anchor_result.offset_440hz_ms,
@@ -1908,8 +1932,7 @@ class PhaseReconstructor:
                         window_s=PHASE_DETECTION_AUDIO_SEARCH_WINDOW_S
                     )
                     if audio_time is not None:
-                        print(f"        [Low-Signal] 440Hz bei Trial {trial_num}: {audio_time:.3f}s")
-                audio_time = self._search_440hz_around_time(audio, sr, expected_time, PHASE_DETECTION_AUDIO_SEARCH_WINDOW_S)
+                        print(f"        [Low-Signal] 440Hz bei Trial {fix_event.get('trial_number')}: {audio_time:.3f}s")
                 
                 if audio_time is not None:
                     deviation = (audio_time - expected_time) * 1000
@@ -2185,7 +2208,7 @@ class PhaseReconstructor:
         
         peaks = self.frequency_detector.detect_frequency_peaks(
             audio_window, sr, 440,
-            expected_times=[window_s],
+            expected_times=[expected_time - start_sample / sr],
             search_window_s=window_s
         )
         
@@ -2213,7 +2236,7 @@ class PhaseReconstructor:
         
         peaks = self.frequency_detector.detect_frequency_peaks(
             audio_window, sr, 880,
-            expected_times=[window_s],
+            expected_times=[expected_time - start_sample / sr],
             search_window_s=window_s
         )
         
@@ -2725,9 +2748,8 @@ def create_qc_graphics_complete(audio: np.ndarray, sr: int,
         ax4.set_ylabel('Offset (ms)', fontsize=11, fontweight='bold')
         
         # Titel mit Statistik
-        r_sq = multi_anchor_result.r_squared if multi_anchor_result else 0.0
-        drift = multi_anchor_result.drift_ms if multi_anchor_result else np.std(offsets)
-        ax4.set_title(f'Offset-Konsistenz ({len(video_times)} Punkte, R²={r_sq:.4f}, Std={drift:.1f}ms)', 
+        drift = getattr(multi_anchor_result, "anchor_std_ms", np.std(offsets)) if multi_anchor_result else np.std(offsets)
+        ax4.set_title(f'Offset-Konsistenz ({len(video_times)} Punkte, Std={drift:.1f}ms; absolute Sync ungeprüft)',
                      fontsize=12, fontweight='bold')
         ax4.legend(loc='upper left', fontsize=9)
         ax4.grid(True, alpha=0.3)
@@ -2810,28 +2832,28 @@ def _create_statistics_plot(phases: Dict, output_dir: Path,
     if multi_anchor_result:
         # Basis-Statistik (immer vorhanden)
         multi_anchor_stats = f"""
- MULTI-ANCHOR-REGRESSION (v2.2):                                   
+ AUDIO-ANCHOR QC (keine Drift-Regression):
    Methode: {multi_anchor_result.method if multi_anchor_result is not None else 'initial'}
    Anchors: {multi_anchor_result.n_anchors}
-   R²: {multi_anchor_result.r_squared:.4f} ({_interpret_r_squared(multi_anchor_result.r_squared)})
+   R²: nicht berechnet; absolute A/V-Synchronisation ungeprüft
 """
         
         #  NEU v2.2: Dual-Anchor spezifisch
-        if multi_anchor_result.method if multi_anchor_result is not None else 'initial' == 'dual_anchor':
+        if multi_anchor_result is not None:
             multi_anchor_stats += f"""   
    DUAL-ANCHOR OFFSETS (Frequenz-spezifisch):
    • 1760 Hz (Kalibrierung): {multi_anchor_result.offset_1760hz_ms if multi_anchor_result is not None else offset_ms:.0f} ms
-   • 440 Hz (Trials):        {multi_anchor_result.offset_440hz_ms:.0f} ms
+   • 440 Hz (Trials):        {multi_anchor_result.offset_440hz_ms if multi_anchor_result.offset_440hz_ms is not None else float('nan'):.0f} ms
    • Differenz:              {multi_anchor_result.frequency_difference_ms:+.0f} ms
    
-   QUALITÄT PRO FREQUENZ:
-   • 1760 Hz: {multi_anchor_result.n_anchors_1760hz} Anchors, R²={multi_anchor_result.r_squared_1760hz:.4f}
-   • 440 Hz:  {multi_anchor_result.n_anchors_440hz} Anchors, R²={multi_anchor_result.r_squared_440hz:.4f}
+   ANCHORS PRO FREQUENZ (keine Regression):
+   • 1760 Hz: {multi_anchor_result.n_anchors_1760hz} Anchors
+   • 440 Hz:  {multi_anchor_result.n_anchors_440hz} Anchors
 """
         else:
             # Standard Multi-Anchor (ohne Dual)
             multi_anchor_stats += f"""   Slope: {multi_anchor_result.slope:.6f}
-   Drift: {multi_anchor_result.drift_ms:.1f} ms
+   Drift: nicht geschätzt (nur konstanter Offset)
    Outliers: {len(multi_anchor_result.outliers)}
 """
         
@@ -4002,7 +4024,7 @@ def run_phase_detection(video_path: Path, json_path: Path, output_dir: Path):
     class SimpleSyncResult:
         def __init__(self, phases, multi_anchor_result):
             self.n_anchors = multi_anchor_result.n_anchors if multi_anchor_result else 0
-            self.std_ms = multi_anchor_result.drift_ms if multi_anchor_result else 0
+            self.std_ms = getattr(multi_anchor_result, "anchor_std_ms", 0) if multi_anchor_result else 0
             self.estimated_latency_ms = 500.0  # Default
             self.offset_ms = phases['sync_info'].get('offset_ms', 0)
     
@@ -4071,8 +4093,8 @@ def run_phase_detection(video_path: Path, json_path: Path, output_dir: Path):
         print(f"\n Multi-Anchor-Statistik:")
         print(f"   • Methode: {multi_anchor_result.method if multi_anchor_result is not None else 'initial'}")
         print(f"   • Anchors: {multi_anchor_result.n_anchors}")
-        print(f"   • R²: {multi_anchor_result.r_squared:.4f}")
-        print(f"   • Drift: {multi_anchor_result.drift_ms:.1f} ms")
+        print("   • R²: nicht berechnet; absolute Sync ungeprüft")
+        print("   • Drift: nicht geschätzt (nur konstanter Offset)")
     
     print(f"\n Nächster Schritt:")
     print(f"   • debug_1_video_analysis.py")
@@ -4189,8 +4211,8 @@ def write_validation_report(output_dir: Path, sync_result: 'SyncResult',
             f.write("2. DUAL-ANCHOR FREQUENZ-ANALYSE\n")
             f.write("-" * 40 + "\n")
             f.write(f"   1760 Hz (Kalibrierung): {sync_info.get('offset_1760hz_ms', 0):.1f} ms\n")
-            f.write(f"   440 Hz (Fixation):      {sync_info.get('offset_440hz_ms', 0):.1f} ms\n")
-            f.write(f"   880 Hz (Trial-End):     {sync_info.get('offset_880hz_ms', 0):.1f} ms\n")
+            f.write(f"   440 Hz (Fixation):      {sync_info.get('offset_440hz_ms') if sync_info.get('offset_440hz_ms') is not None else float('nan'):.1f} ms\n")
+            f.write(f"   880 Hz (Trial-End):     {sync_info.get('offset_880hz_ms') if sync_info.get('offset_880hz_ms') is not None else float('nan'):.1f} ms\n")
             f.write(f"   Frequenz-Differenz:     {sync_info.get('frequency_difference_ms', 0):+.1f} ms\n")
             f.write("\n")
         

@@ -57,6 +57,10 @@ class RawFrameTests(unittest.TestCase):
             (source / 'config_used.json').write_text(json.dumps(dict(raw_config, video_fps='25hz')))
             self.assertFalse(scanner.copy_step_outputs(source, target, 'debug_5_ptgaze'))
             (source / 'config_used.json').write_text(json.dumps(raw_config))
+            from shared.audio_sync import SYNC_VERSION
+            phase = {'sync_info': {'quality': {'version': SYNC_VERSION}}, 'phases': {}}
+            for run in (source, target):
+                (run / 'phases_detected.json').write_text(json.dumps(phase))
             self.assertTrue(scanner.copy_step_outputs(source, target, 'debug_5_ptgaze'))
 
     def test_eyelink_cache_is_independent_of_image_processing(self):

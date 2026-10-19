@@ -41,6 +41,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 # =================================================================================
 from shared.shared_image_preprocessing import validate_preprocess_mode
 from shared.frame_timing import TIMEBASE_VERSION
+from shared.audio_sync import SYNC_VERSION
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple
 import subprocess
@@ -327,6 +328,8 @@ class CrossRunCacheScanner:
 
     def _has_step_outputs(self, run_folder: Path, step: str) -> bool:
         """Prueft ob alle Output-Dateien eines Schritts existieren."""
+        if not self._sync_cache_compatible(run_folder, None, step):
+            return False
         
         if step not in self.output_mapping:
             return False
@@ -348,12 +351,35 @@ class CrossRunCacheScanner:
                     return False
         
         return True
+
+    @staticmethod
+    def _sync_cache_compatible(source_run, target_run, step):
+        affected = {'debug_0', 'debug_1_mediapipe', 'debug_1_ptgaze',
+                    'debug_4', 'debug_5_mediapipe', 'debug_5_ptgaze', 'debug_6'}
+        if step not in affected:
+            return True
+        try:
+            source = json.loads((Path(source_run) / 'phases_detected.json').read_text())
+            if source['sync_info'].get('quality', {}).get('version') != SYNC_VERSION:
+                return False
+            if step != 'debug_0' and target_run is not None:
+                target = json.loads((Path(target_run) / 'phases_detected.json').read_text())
+                # Model windows and downstream timestamps depend on these phases.
+                if source != target:
+                    return False
+        except (OSError, ValueError, KeyError):
+            return False
+        return True
     
     def copy_step_outputs(self, source_run: Path, target_run: Path, 
                          step: str) -> bool:
         """Kopiert ALLE Output-Dateien eines Schritts."""
         
         if step not in self.output_mapping:
+            return False
+
+        if not self._sync_cache_compatible(source_run, target_run, step):
+            print(f"      [CACHE REJECTED] {step}: obsolete or different audio synchronization")
             return False
         
         # FIX v2.2: Pruefe ob source == target (verhindert "same file" Fehler)

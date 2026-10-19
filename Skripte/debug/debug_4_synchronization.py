@@ -745,6 +745,7 @@ sync_info_export = make_json_serializable({
     'offset_used_ms': float(offset_used),  # NEU: Tatsaechlich genutzter Offset
     'confidence': float(confidence),
     'source': 'phases_detected.json',
+    'quality': sync_info.get('quality', {}),
     'debug_0_version': phases['sync_info'].get('method', 'unknown'),
     
     # MediaPipe-Statistiken
@@ -776,7 +777,10 @@ sync_info_export = make_json_serializable({
     'validation': {
         'coverage_percent': float(coverage) if blocks_df is not None else None,
         'n_fixation_blocks': int(n_fixation_phases) if blocks_df is not None else None,
-        'audio_validated': bool(validation)
+        'audio_validated': bool(validation) or any(
+            family.get('count', 0) > 0
+            for family in sync_info.get('quality', {}).get('frequency_families', {}).values()),
+        'absolute_sync_verified': False
     }
 })
 
