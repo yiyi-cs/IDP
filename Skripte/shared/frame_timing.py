@@ -40,40 +40,97 @@ _CLOCKS = {}
 
 
 def exact_frame_window(video, clock, start_frame, end_frame, width, height):
-    """Accurate PTS seek and sequential decode; never CAP_PROP_POS_FRAMES on VFR.
+    """PTS-window FFmpeg decoder with bounded stdout reads and drained stderr.
 
-    Output FPS conversion is disabled. The yielded ordinal belongs to the same
-    ffprobe presentation-time table used to select this window.
+    Same PTS seek, ffmpeg options, output and frame numbering as the original.
+    Fails explicitly if one frame cannot be read within FRAME_READ_TIMEOUT_S.
+    This is a hang mitigation; it does not independently verify seek frame identity.
     """
     if start_frame >= end_frame:
         return
-    count = end_frame-start_frame
+    count = end_frame - start_frame
     command = ['ffmpeg', '-v', 'error', '-seek_timestamp', '1',
         '-ss', f'{clock.at(start_frame)/1000:.9f}', '-i', str(video),
         '-map', '0:v:0', '-an', '-sn', '-dn', '-frames:v', str(count), '-fps_mode', 'passthrough',
         '-f', 'rawvideo', '-pix_fmt', 'bgr24', 'pipe:1']
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    size = int(width)*int(height)*3
-    try:
-        for frame_number in range(start_frame, end_frame):
-            data = bytearray()
-            while len(data) < size:
-                chunk = process.stdout.read(size-len(data))
-                if not chunk:
-                    error = process.stderr.read().decode(errors='replace')
-                    raise RuntimeError(f'Exact video decode stopped at frame {frame_number}: {error}')
-                data.extend(chunk)
-            yield frame_number, np.frombuffer(data, dtype=np.uint8).reshape(int(height), int(width), 3)
-        process.stdout.close()
-        error = process.stderr.read().decode(errors='replace')
-        if process.wait() != 0:
-            raise RuntimeError(f'Exact video decode failed: {error}')
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            process.wait()
-        process.stdout.close()
-        process.stderr.close()
+
+    # tempfile prevents stderr pipe-buffer deadlocks; diagnostic text is included
+    # in raised errors without leaving large files behind.
+    import queue
+    import threading
+    import tempfile
+
+    FRAME_READ_TIMEOUT_S = 120
+    size = int(width) * int(height) * 3
+    with tempfile.TemporaryFile(mode='w+b') as stderr_file:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr_file)
+        results = queue.Queue(maxsize=2)
+        stop = threading.Event()
+
+        def read_frames():
+            try:
+                for frame_number in range(start_frame, end_frame):
+                    if stop.is_set():
+                        break
+                    data = bytearray()
+                    while len(data) < size:
+                        chunk = process.stdout.read(size - len(data))
+                        if not chunk:
+                            raise EOFError(f'FFmpeg stdout ended at frame {frame_number} '
+                                           f'({len(data)}/{size} bytes)')
+                        data.extend(chunk)
+                    results.put(('frame', frame_number, bytes(data)))
+                results.put(('done', None, None))
+            except BaseException as exc:
+                results.put(('error', None, exc))
+
+        reader = threading.Thread(target=read_frames, name='ffmpeg-frame-reader', daemon=True)
+        reader.start()
+        try:
+            for expected_frame in range(start_frame, end_frame):
+                try:
+                    kind, frame_number, payload = results.get(timeout=FRAME_READ_TIMEOUT_S)
+                except queue.Empty as exc:
+                    raise TimeoutError(
+                        f'FFmpeg stalled while waiting for video frame {expected_frame} '
+                        f'({FRAME_READ_TIMEOUT_S}s without a complete frame); '
+                        f'video={video}, PTS={clock.at(expected_frame):.3f}ms'
+                    ) from exc
+                if kind == 'error':
+                    raise RuntimeError(f'FFmpeg decode error near frame {expected_frame}: {payload}') from payload
+                if kind != 'frame' or frame_number != expected_frame:
+                    raise RuntimeError(f'Unexpected FFmpeg output at frame {expected_frame}: '
+                                       f'{kind}, {frame_number}')
+                yield frame_number, np.frombuffer(payload, dtype=np.uint8).reshape(
+                    int(height), int(width), 3)
+
+            # Close stdout before waiting only after all expected frames have been read;
+            # this avoids keeping a broken pipe open indefinitely.
+            stop.set()
+            process.stdout.close()
+            try:
+                return_code = process.wait(timeout=15)
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError('FFmpeg did not exit after completing frame output') from exc
+            if return_code != 0:
+                stderr_file.seek(0)
+                msg = stderr_file.read().decode(errors='replace')[-5000:]
+                raise RuntimeError(f'Exact video decode failed ({return_code}): {msg}')
+        finally:
+            stop.set()
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+            try:
+                process.stdout.close()
+            except (OSError, ValueError):
+                pass
+            reader.join(timeout=2)
+
 
 
 def load_frame_clock(video, run_dir):

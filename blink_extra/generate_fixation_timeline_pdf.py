@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+import warnings
+from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -14,6 +17,14 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Patch
+
+# Import the shared detector while retaining the legacy Run/test60 layout.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'Skripte'))
+from blink.run_data import boolean_mask, join_blink_mask, stable_events
+from fixation.eyelink_sanity import pixels_to_degrees as eyelink_pixels_to_degrees, sample_eyelink
+from fixation.fixation_detector import (
+    FixationConfig, detect_fixations, build_valid_segments, detect_segment_fixations,
+)
 
 # ----------- config -----------
 EYELINK_COLOR = '#111111'
@@ -93,45 +104,65 @@ def load_trials(phases_json: Path, include_practice: bool = False) -> List[Trial
     return out
 
 
-def load_blink_intervals(frame_log_csv: Path, trials: List[TrialInfo],
-                         pt_df: pd.DataFrame) -> Dict[int, List[Tuple[float, float]]]:
-    """Return invalid-eye intervals in trial-relative *EyeLink synchronized* ms.
+def prepare_frame_support(frame_log_csv, pt_df, run_dir):
+    """Use complete frame times only if they agree with saved synchronized gaze.
 
-    Match video frame numbers to PTGaze frames first. Never subtract raw PTS
-    from a phase's video timestamp: the clocks can have different offsets.
+    Legacy CSV timestamps are never shifted or silently replaced. When raw frame
+    times disagree, use only measured gaze timestamps and report limited support.
     """
-    log = pd.read_csv(frame_log_csv)
-    if not {'frame_number', 'valid_eye_frame'}.issubset(log.columns):
-        raise ValueError("Blink frame log needs frame_number and valid_eye_frame")
-    if 'frame' not in pt_df.columns:
-        raise ValueError("PTGaze file needs frame for exact blink-log join")
-    pt_small = pt_df[['frame', 'trial_number', 'timestamp_ms_synced']].copy()
-    joined = pt_small.merge(log[['frame_number', 'valid_eye_frame']],
-                            left_on='frame', right_on='frame_number', how='left',
-                            validate='one_to_one')
-    if joined['valid_eye_frame'].isna().any():
-        raise ValueError("Some PTGaze frames have no matching blink validity entry")
-    trial_by_id = {t.trial_number: t for t in trials}
-    out = {t.trial_number: [] for t in trials}
-    for trial_number, group in joined.groupby('trial_number', sort=False):
-        if pd.isna(trial_number) or int(trial_number) not in trial_by_id:
-            continue
-        tr = trial_by_id[int(trial_number)]
-        group = group.sort_values('timestamp_ms_synced').reset_index(drop=True)
-        time = group['timestamp_ms_synced'].to_numpy(float)
-        invalid = ~group['valid_eye_frame'].astype(bool).to_numpy()
-        ids = np.flatnonzero(invalid)
-        if not len(ids):
-            continue
-        runs = np.split(ids, np.flatnonzero(np.diff(ids) > 1) + 1)
-        for r in runs:
-            # Boundaries at sample midpoints, giving the shaded intervals
-            # a meaningful width while retaining the detector's clock.
-            i, j = int(r[0]), int(r[-1])
-            left = (time[i-1] + time[i])/2 if i > 0 else time[i]
-            right = (time[j] + time[j+1])/2 if j+1 < len(time) else time[j]
-            out[tr.trial_number].append(
-                (left - tr.trial_start_eye_ms, right - tr.trial_start_eye_ms))
+    log = pd.read_csv(frame_log_csv).sort_values('frame_number').reset_index(drop=True)
+    gaze = join_blink_mask(pt_df, log).sort_values('timestamp_ms_synced').reset_index(drop=True)
+    log['valid_eye_frame'] = boolean_mask(log['valid_eye_frame'])
+    audit = {'frame_log': str(frame_log_csv), 'gaze_timestamps_changed': False,
+             'full_frame_support': False, 'max_clock_error_ms': None}
+    sync_path = Path(run_dir) / 'debug_4_sync_info.json'
+    if 'video_time_ms' in log and sync_path.is_file():
+        offset = float(json.loads(sync_path.read_text())['offset_used_ms'])
+        times = pd.to_numeric(log['video_time_ms'], errors='coerce') + offset
+        mapped = gaze['frame'].map(pd.Series(times.to_numpy(), index=log['frame_number']))
+        error = (mapped.to_numpy() - gaze['timestamp_ms_synced'].to_numpy()).astype(float)
+        if np.isfinite(error).all():
+            audit['max_clock_error_ms'] = float(np.abs(error).max())
+        if (np.isfinite(times).all() and np.all(np.diff(times) > 0)
+                and np.isfinite(error).all() and np.abs(error).max() <= 0.01):
+            end = (pd.to_numeric(log['frame_end_time_ms'], errors='coerce') + offset
+                   if 'frame_end_time_ms' in log else
+                   pd.Series(np.r_[times.to_numpy()[1:], times.iloc[-1] + np.median(np.diff(times))]))
+            if np.isfinite(end).all() and np.all(end.to_numpy() > times.to_numpy()):
+                log['timestamp_ms_synced'] = times.to_numpy()
+                log['sample_end_ms'] = end.to_numpy()
+                audit['full_frame_support'] = True
+                return gaze, log, audit
+    audit['note'] = ('Legacy gaze clock retained. Blink shading covers recorded gaze frames only; '
+                     'invalid periods without gaze timestamps cannot be placed reliably.')
+    warnings.warn(audit['note'])
+    support = gaze[['frame', 'timestamp_ms_synced', 'valid_eye_frame']].rename(columns={'frame':'frame_number'}).copy()
+    t = support['timestamp_ms_synced'].to_numpy(float)
+    f = support['frame_number'].to_numpy(int)
+    dt = np.diff(t)
+    adjacent = (np.diff(f) == 1) & (dt > 0)
+    if not adjacent.any():
+        raise ValueError('No adjacent measured frames available to bound legacy shading')
+    nominal = float(np.median(dt[adjacent]))
+    support['sample_end_ms'] = np.r_[t[1:], t[-1] + nominal]
+    gap_ids = np.flatnonzero(~adjacent)
+    support.loc[gap_ids, 'sample_end_ms'] = t[gap_ids] + np.minimum(dt[gap_ids], nominal)
+    return gaze, support, audit
+
+
+def load_blink_intervals(frame_log_csv, trials, pt_df, frame_support=None):
+    if frame_support is None:
+        _, frame_support, _ = prepare_frame_support(frame_log_csv, pt_df, frame_log_csv.parent.parent)
+    out = {}
+    for tr in trials:
+        q = frame_support[frame_support['timestamp_ms_synced'].between(
+            tr.trial_start_eye_ms, tr.trial_end_eye_ms, inclusive='left')]
+        invalid = q[~boolean_mask(q['valid_eye_frame'])]
+        groups = invalid['frame_number'].diff().ne(1).cumsum()
+        out[tr.trial_number] = [
+            (max(float(g['timestamp_ms_synced'].min()), tr.trial_start_eye_ms) - tr.trial_start_eye_ms,
+             min(float(g['sample_end_ms'].max()), tr.trial_end_eye_ms) - tr.trial_start_eye_ms)
+            for _, g in invalid.groupby(groups, sort=False)]
     return out
 
 
@@ -161,6 +192,11 @@ def load_eyelink_gaze(eye_csv: Path) -> pd.DataFrame:
     q = df.copy()
     q['timestamp_ms'] = pd.to_numeric(q['timestamp_ms'], errors='coerce')
     q['x_pos'] = pd.to_numeric(q['x_pos'], errors='coerce')
+    valid = np.isfinite(q['x_pos']) & q['x_pos'].gt(0)
+    for column in ['y_pos', 'pupil_size']:
+        if column in q:
+            valid &= pd.to_numeric(q[column], errors='coerce').gt(0)
+    q.loc[~valid, 'x_pos'] = np.nan
     return q
 
 
@@ -171,7 +207,7 @@ def load_fixations_native(path: Path) -> pd.DataFrame:
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors='coerce')
     if 'is_practice' in out.columns:
-        out = out[~out['is_practice'].fillna(False)]
+        out = out[~boolean_mask(out['is_practice'].fillna(False))]
     return out
 
 
@@ -193,179 +229,44 @@ def mask_intervals(times_ms: np.ndarray, intervals_rel_ms: List[Tuple[float, flo
     return good
 
 
-def rolling_median_time(times_ms: np.ndarray, x: np.ndarray, window_ms: float = SMOOTH_WINDOW_MS) -> np.ndarray:
-    out = np.full_like(x, np.nan, dtype=float)
-    n = len(x)
-    left = 0
-    for i in range(n):
-        t0 = times_ms[i] - window_ms / 2.0
-        t1 = times_ms[i] + window_ms / 2.0
-        while left < n and times_ms[left] < t0:
-            left += 1
-        right = left
-        while right < n and times_ms[right] <= t1:
-            right += 1
-        vals = x[left:right]
-        vals = vals[np.isfinite(vals)]
-        if len(vals):
-            out[i] = np.median(vals)
-    return out
+def build_eyelink_sanity(trials, eyelink_df, pt_df, blink_intervals):
+    """Use the project's core I-DT, with an independent EyeLink P75 threshold.
 
-
-def estimate_threshold_from_fixphases(times_ms: np.ndarray, x_smooth: np.ndarray, fixation_segments_ms: List[Tuple[float, float]], percentile: float = 75.0) -> float:
-    disp_values = []
-    for a, b in fixation_segments_ms:
-        sel = (times_ms >= a) & (times_ms <= b) & np.isfinite(x_smooth)
-        seg_t = times_ms[sel]
-        seg_x = x_smooth[sel]
-        if len(seg_t) < 2:
-            continue
-        left = 0
-        for i in range(len(seg_t)):
-            while seg_t[i] - seg_t[left] > SMOOTH_WINDOW_MS:
-                left += 1
-            vals = seg_x[left:i+1]
-            vals = vals[np.isfinite(vals)]
-            if len(vals) >= 2:
-                disp_values.append(float(np.nanmax(vals) - np.nanmin(vals)))
-    if not disp_values:
-        return np.nan
-    return float(np.percentile(disp_values, percentile))
-
-
-def detect_fixations_idt_x(times_ms: np.ndarray, x_deg: np.ndarray, threshold_deg: float,
-                           min_fix_ms: float = MIN_FIX_MS, max_invalid_gap_ms: float = MAX_INVALID_GAP_MS) -> List[dict]:
-    valid = np.isfinite(times_ms) & np.isfinite(x_deg)
-    if valid.sum() < 2:
-        return []
-    times = times_ms[valid]
-    x = x_deg[valid]
-    # Split into segments across long gaps.
-    gaps = np.diff(times)
-    break_idx = np.where(gaps > max_invalid_gap_ms)[0]
-    starts = np.r_[0, break_idx + 1]
-    ends = np.r_[break_idx + 1, len(times)]
-    out = []
-    for seg_start, seg_end in zip(starts, ends):
-        t = times[seg_start:seg_end]
-        xx = x[seg_start:seg_end]
-        if len(t) < 2:
-            continue
-        i = 0
-        while i < len(t) - 1:
-            # find earliest j that reaches min duration
-            j = i + 1
-            while j < len(t) and (t[j] - t[i]) < min_fix_ms - EPS:
-                j += 1
-            if j >= len(t):
-                break
-            vals = xx[i:j+1]
-            disp = np.nanmax(vals) - np.nanmin(vals)
-            if disp <= threshold_deg + EPS:
-                k = j
-                while k + 1 < len(t):
-                    cand = xx[i:k+2]
-                    disp2 = np.nanmax(cand) - np.nanmin(cand)
-                    if disp2 <= threshold_deg + EPS:
-                        k += 1
-                    else:
-                        break
-                out.append({
-                    'start_time': float(t[i]),
-                    'end_time': float(t[k]),
-                    'duration': float(t[k] - t[i]),
-                    'x_pos': float(np.nanmean(xx[i:k+1])),
-                    'dispersion_x_deg': float(np.nanmax(xx[i:k+1]) - np.nanmin(xx[i:k+1])),
-                    'threshold_used_deg': float(threshold_deg),
-                })
-                i = k + 1
-            else:
-                i += 1
-    return out
-
-
-def eyelink_pixels_to_degrees(x_px: np.ndarray) -> np.ndarray:
-    """Convert EyeLink screen x pixels to visual angle using experiment geometry.
-
-    Same geometry used for the preliminary bjs4 four-row visualisation:
-    1920 px monitor width, 53.2 cm width, 70 cm viewing distance.
+    Fit on experimental trials only, as in the previous visualization. Preserve
+    saved gaze timestamps; the plotted PTGaze event CSV is never overwritten.
     """
-    x_px = np.asarray(x_px, dtype=float)
-    return np.degrees(np.arctan2((x_px - (1920.0 - 1.0)/2.0) * 53.2/1920.0, 70.0))
-
-
-def build_eyelink_sanity(trials: List[TrialInfo], eyelink_df: pd.DataFrame, pt_df: pd.DataFrame,
-                         blink_intervals: Dict[int, List[Tuple[float, float]]]) -> Tuple[pd.DataFrame, float]:
-    """Sample valid EyeLink x at PTGaze's actual synchronized timestamps.
-
-    Threshold is fitted once across all experimental fixation phases (P75),
-    then applied to every trial. This is a stand-alone sanity-check implementation,
-    not a byte-for-byte reproduction of the project's detector.
-    """
-    eye = eyelink_df.sort_values('timestamp_ms').copy()
-    valid = (eye['pupil_size'] > 0) & eye['x_pos'].notna() & eye['y_pos'].notna() & (eye['x_pos'] > 0) & (eye['y_pos'] > 0)
-    eye['x_valid'] = eye['x_pos'].where(valid)
-    # EyeLink runs at ~2000 Hz, so integer millisecond timestamps can repeat.
-    eg = eye.groupby('timestamp_ms', as_index=False)['x_valid'].mean()
-    et = eg['timestamp_ms'].to_numpy(float)
-    ex = eg['x_valid'].to_numpy(float)
-    sampled = []
-    noise_disps = []
+    rows = []
     for tr in trials:
-        pt = pt_df[pt_df['trial_number'].eq(tr.trial_number)].sort_values('timestamp_ms_synced')
-        pt = pt[(pt['timestamp_ms_synced'] >= tr.trial_start_eye_ms) &
-                (pt['timestamp_ms_synced'] <= tr.trial_end_eye_ms)]
-        if pt.empty:
-            continue
-        # Crucial: timestamp_ms_synced ALREADY uses the EyeLink clock.
-        times = pt['timestamp_ms_synced'].to_numpy(float)
-        ix = np.searchsorted(et, times, side='left')
-        right = np.clip(ix, 0, len(et)-1)
-        left = np.clip(ix-1, 0, len(et)-1)
-        closest = np.where(np.abs(times-et[left]) <= np.abs(times-et[right]), left, right)
-        vals = ex[closest].copy()
-        vals[np.abs(times-et[closest]) > 2.0] = np.nan
-        # Webcam blink / invalid regions have been expressed on the same video
-        # trial-relative scale, so apply them to the sample's relative EyeLink time.
-        relative_eye_ms = times - tr.trial_start_eye_ms
-        for a_rel, b_rel in blink_intervals.get(tr.trial_number, []):
-            vals[(relative_eye_ms >= a_rel) & (relative_eye_ms <= b_rel)] = np.nan
-        x_deg = eyelink_pixels_to_degrees(vals)
-        sampled.append((tr, times, x_deg))
-        # Fit the threshold using the experimental fixation-cross phase only.
-        phase_mask = (times >= tr.fix_start_eye_ms) & (times <= tr.fix_end_eye_ms)
-        good = phase_mask & np.isfinite(x_deg)
-        t = times[good]
-        x = x_deg[good]
-        if len(t) < 3:
-            continue
-        smoothed = rolling_median_time(t, x)
-        # Forward 100 ms windows, matching preliminary sanity-check method.
-        for i in range(len(t)):
-            j = np.searchsorted(t, t[i] + SMOOTH_WINDOW_MS, side='left')
-            if j < len(t) and j > i:
-                noise_disps.append(float(np.ptp(smoothed[i:j+1])))
-    if not noise_disps:
-        raise ValueError('Could not estimate EyeLink adaptive threshold from fixation phases. Check time alignment and blink mask.')
-    threshold = float(np.percentile(noise_disps, 75.0))
-    records = []
-    for tr, times, x_deg in sampled:
-        # Smooth only continuous valid chunks, so blink gaps cannot be smoothed over.
-        good_ids = np.flatnonzero(np.isfinite(x_deg))
-        if len(good_ids) == 0:
-            continue
-        cuts = np.flatnonzero((np.diff(times[good_ids]) > MAX_INVALID_GAP_MS) |
-                                 (np.diff(good_ids) > 1)) + 1
-        for ids in np.split(good_ids, cuts):
-            if len(ids) < 2:
-                continue
-            sm = rolling_median_time(times[ids], x_deg[ids])
-            for fx in detect_fixations_idt_x(times[ids], sm, threshold):
-                fx['trial_number'] = tr.trial_number
-                records.append(fx)
-    cols = ['trial_number', 'start_time', 'end_time', 'duration', 'x_pos',
-            'dispersion_x_deg', 'threshold_used_deg']
-    return pd.DataFrame.from_records(records, columns=cols), threshold
+        q = pt_df[pt_df['trial_number'].eq(tr.trial_number)].copy()
+        q = q[q['timestamp_ms_synced'].between(tr.trial_start_eye_ms, tr.trial_end_eye_ms, inclusive='left')]
+        q['phase_type'] = 'transition'
+        q.loc[q['timestamp_ms_synced'].between(tr.fix_start_eye_ms, tr.fix_end_eye_ms, inclusive='left'), 'phase_type'] = 'fixation'
+        q.loc[q['timestamp_ms_synced'].between(tr.stim_start_eye_ms, tr.stim_end_eye_ms, inclusive='left'), 'phase_type'] = 'stimulus'
+        rows.append(q)
+    gaze = pd.concat(rows, ignore_index=True).sort_values('timestamp_ms_synced')
+    sampled = sample_eyelink(eyelink_df, gaze)
+    config = FixationConfig()
+    result = detect_fixations(sampled, config=config)
+    # Missing frame rows in legacy files must not make the core join long gaps.
+    events = []
+    for trial, q in sampled.groupby('trial_number', sort=True):
+        q = q.sort_values('timestamp_ms_synced')
+        cuts = ((q['frame'].diff() > 1) &
+                (q['timestamp_ms_synced'].diff() > config.max_gap_ms)).cumsum()
+        for _, chunk in q.groupby(cuts, sort=False):
+            for segment in build_valid_segments(chunk, config):
+                for event in detect_segment_fixations(segment, result.threshold_deg, config):
+                    event.update(trial_number=trial, fixation_id=len(events)+1)
+                    events.append(event)
+    out = stable_events(pd.DataFrame(events))
+    out.attrs['sampled_input'] = sampled
+    out.attrs['metadata'] = {'detector': 'fixation.fixation_detector',
+        'config': asdict(config), 'adaptive_threshold_deg': result.threshold_deg,
+        'threshold_trials': 'non-practice experimental trials',
+        'sampling_tolerance_ms': 2.0, 'n_noise_windows': len(result.noise_distribution),
+        'missing_frame_long_gaps_split': True}
+    return out, result.threshold_deg
+
 
 def rel_events(df: pd.DataFrame, tr: TrialInfo, time_mode: str) -> List[Tuple[float, float]]:
     x = df[df['trial_number'].eq(tr.trial_number)].copy()
@@ -398,11 +299,15 @@ def plot_trial(fig, tr: TrialInfo, eyelink_df: pd.DataFrame, pt_df: pd.DataFrame
     eye = eyelink_df[(eyelink_df['timestamp_ms'] >= tr.trial_start_eye_ms) & (eyelink_df['timestamp_ms'] <= tr.trial_end_eye_ms)].copy()
     eye_rel_s = (eye['timestamp_ms'].to_numpy() - tr.trial_start_eye_ms) / 1000.0
     eye_x = eyelink_pixels_to_degrees(eye['x_pos'].to_numpy(float))
-    pt = pt_df[pt_df['trial_number'].eq(tr.trial_number)].copy()
+    pt = pt_df[pt_df['trial_number'].eq(tr.trial_number)].sort_values('timestamp_ms_synced').copy()
     pt_rel_s = (pt['timestamp_ms_synced'].to_numpy() - tr.trial_start_eye_ms) / 1000.0
     pt_x = pt['gaze_deg_x_calib'].to_numpy()
 
     ax1.plot(eye_rel_s, eye_x, color=EYELINK_COLOR, lw=0.8, alpha=0.75, label='EyeLink gaze')
+    # NaN separators break the line without assigning invented times to frames.
+    breaks = np.flatnonzero(np.diff(pt['frame'].to_numpy()) != 1) + 1
+    pt_rel_s = np.insert(pt_rel_s, breaks, np.nan)
+    pt_x = np.insert(pt_x, breaks, np.nan)
     ax1.plot(pt_rel_s, pt_x, color=PTGAZE_COLOR, lw=1.0, alpha=0.95, label='PTGaze gaze')
     for a_ms, b_ms in blink_intervals.get(tr.trial_number, []):
         ax1.axvspan(a_ms/1000.0, b_ms/1000.0, facecolor=BLINK_COLOR, edgecolor=BLINK_EDGE, alpha=0.18, hatch='////', linewidth=0.7)
@@ -477,24 +382,35 @@ def main():
     if wanted is not None:
         trials = [t for t in trials if t.trial_number in wanted]
 
-    pt_df = load_ptgaze(ptgaze_path)
-    blink_intervals = load_blink_intervals(frame_log_path, trials, pt_df)
+    pt_df, frame_support, audit = prepare_frame_support(
+        frame_log_path, load_ptgaze(ptgaze_path), run_dir)
+    blink_intervals = load_blink_intervals(frame_log_path, trials, pt_df, frame_support)
+    audit.update(run_dir=str(run_dir), ptgaze_events=str(ours_pt_path),
+                 ptgaze_events_recomputed=False)
+    (out_dir / f'{args.vp}_visualization_audit.json').write_text(json.dumps(audit, indent=2))
     eye_df = load_eyelink_gaze(eyelink_gaze_path)
     native_fix = load_fixations_native(native_fix_path)
     ours_pt = load_fixations_ours(ours_pt_path)
 
     # Fit participant-level P75 using all non-practice trials, even for --trial 1.
     all_trials = load_trials(phases_path, include_practice=False)
-    all_blinks = load_blink_intervals(frame_log_path, all_trials, pt_df)
+    all_blinks = load_blink_intervals(frame_log_path, all_trials, pt_df, frame_support)
     ours_eye, mean_thr = build_eyelink_sanity(all_trials, eye_df, pt_df, all_blinks)
     ours_eye_path = out_dir / f'{args.vp}_debug_6_eyelink_fixations_sanity.csv'
     ours_eye.to_csv(ours_eye_path, index=False)
+    ours_eye.attrs['sampled_input'].to_csv(out_dir / f'{args.vp}_eyelink_sanity_samples.csv', index=False)
+    (out_dir / f'{args.vp}_eyelink_sanity_metadata.json').write_text(
+        json.dumps(ours_eye.attrs['metadata'], indent=2))
 
     pdf_path = out_dir / f'{args.vp}_fixation_four_row_timelines.pdf'
     with PdfPages(pdf_path) as pdf:
         for tr in trials:
             fig = plt.figure(figsize=(13.0, 8.0))
             plot_trial(fig, tr, eye_df, pt_df, native_fix, ours_eye, ours_pt, blink_intervals, title_prefix=f'{args.vp} — ')
+            fig.subplots_adjust(bottom=.11)
+            note = ('Blink shading: complete frame log; saved gaze clock verified against frame log.'
+                    if audit['full_frame_support'] else
+                    'Legacy gaze clock retained; blink shading limited to recorded gaze frames.')
             pdf.savefig(fig, bbox_inches='tight')
             plt.close(fig)
 
